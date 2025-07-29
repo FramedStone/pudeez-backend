@@ -1,0 +1,7 @@
+{
+  "test": "test",
+  "foo": {
+    "foo": "foo",
+    "bar": "bar"
+  }
+}

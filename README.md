@@ -14,6 +14,7 @@ This backend powers the Pudeez marketplace, handling user auth (zkLogin), produc
 - [ ] TypeScript, ESLint, Prettier setup
 - [ ] Business Logic setup
   - [ ] Steam game assets tokenizing
+    - [ ] using their own Steam Web API key? (only if needed)
   - [ ] Escrow process
   - [ ] Marketplace Profit Mechanism
 - [ ] Auth: zkLogin integration, JWT
@@ -30,4 +31,5 @@ This backend powers the Pudeez marketplace, handling user auth (zkLogin), produc
 - [ ] ElizaOS integration
   - [ ] As chatbot - marketplace knowledge
   - [ ] As agent - marketplace actions
+- [ ] environment setup & environment template
 - [ ] proper README.md
