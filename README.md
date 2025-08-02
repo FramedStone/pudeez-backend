@@ -9,6 +9,7 @@ This backend powers the Pudeez marketplace, handling user auth (zkLogin), produc
 - Sui zkLogin SDK
 - Sui TypeScript SDK
 - Walrus 
+- Running on Sui Devnet
 
 ## TODO
 - [ ] TypeScript, ESLint, Prettier setup
