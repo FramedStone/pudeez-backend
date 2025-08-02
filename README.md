@@ -12,7 +12,7 @@ This backend powers the Pudeez marketplace, handling user auth (zkLogin), produc
 - Running on Sui Devnet
 
 ## TODO
-- [ ] TypeScript, ESLint, Prettier setup
+- [ ] TypeScript, ESLint, Prettier setup (with Husky for automation if needed)
 - [ ] Business Logic setup
   - [ ] Steam game assets tokenizing
     - [ ] using their own Steam Web API key? (only if needed)
