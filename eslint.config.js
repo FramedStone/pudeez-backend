@@ -18,8 +18,8 @@ export default defineConfig([
                 {
                     minimumDescriptionLength: 3,
                     'ts-check': false,
-                    'ts-expect-error': 'allow-with-description',
-                    'ts-ignore': true,
+                    'ts-expect-error': false,
+                    'ts-ignore': 'allow-with-description',
                     'ts-nocheck': true,
                 },
             ]

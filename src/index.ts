@@ -46,9 +46,17 @@ app.get('/api/users', (req: Request, res: Response) => {
 });
 
 // Error handling middleware
-app.use((err: Error, req: Request, res: Response) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+app.use(
+    (
+        err: Error,
+        req: Request,
+        res: Response,
+        // gotta love this shit
+        // eslint-disable-next-line
+        next: NextFunction
+    ) => {
+      console.error(err.stack);
+      res.status(500).json({ error: 'Something went wrong!' });
 });
 
 // 404 handler
