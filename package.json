@@ -2,7 +2,7 @@
   "name": "pudeez-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/bundle.js",
   "scripts": {
     "dev": "concurrently \"webpack --watch\" \"nodemon dist/bundle.js\"",
     "build": "webpack --mode=production",
