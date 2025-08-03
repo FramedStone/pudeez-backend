@@ -5,6 +5,7 @@ module.exports = {
   entry: './src/index.ts',
   target: 'node',
   externals: [nodeExternals()],
+  devtool: 'eval',
   module: {
     rules: [
       {
