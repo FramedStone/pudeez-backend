@@ -25,11 +25,6 @@ app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to the Express.js TypeScript API!' });
 });
 
-// User endpoints
-app.get('/api/users', (req: Request, res: Response) => {
-  res.json(users);
-});
-
 // Error handling middleware
 app.use(
     (
