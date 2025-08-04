@@ -26,7 +26,8 @@
     "jsonwebtoken": "^9.0.2",
     "openid": "^2.0.13",
     "passport": "^0.7.0",
-    "passport-steam": "^1.0.18"
+    "passport-steam": "^1.0.18",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
