@@ -1,7 +1,8 @@
 import express, { Request, Response, NextFunction } from 'express';
+import axios from 'axios';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3111;
 
 // Middleware
 app.use(express.json());
@@ -23,6 +24,13 @@ app.get('/health', (req: Request, res: Response) => {
 // Root endpoint
 app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to the Express.js TypeScript API!' });
+});
+
+// Get the ZK proof from PROVER_URL
+app.post('/api/generate-zkp', (req: Request, res: Response) => {
+    axios.post(process.env.PROVER_URL || "", req.body, { headers: { 'Content-Type': 'application/json' } })
+        .then(prover_response => res.json(prover_response.data))
+        .catch(err => console.error(err));
 });
 
 // Error handling middleware
