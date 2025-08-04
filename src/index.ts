@@ -35,11 +35,6 @@ app.use(
       res.status(500).json({ error: 'Something went wrong!' });
 });
 
-// 404 handler
-app.use('/{*any}', (req: Request, res: Response) => {
-  res.status(404).json({ error: 'Route not found' });
-});
-
 
 // -- Endpoints --
 // Health check
@@ -58,6 +53,12 @@ app.post('/api/generate-zkp', (req: Request, res: Response) => {
         .then(prover_response => res.json(prover_response.data))
         .catch(err => console.error(err));
 });
+
+// 404 handler
+app.use('/{*any}', (req: Request, res: Response) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
 
 // Start server
 app.listen(PORT, () => {
