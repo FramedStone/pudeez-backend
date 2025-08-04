@@ -3,13 +3,6 @@ import express, { Request, Response, NextFunction } from 'express';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Types
-interface User {
-  id: number;
-  name: string;
-  email: string;
-}
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -21,14 +14,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   next();
 });
-
-// Dummy data
-const users: User[] = [
-  { id: 1, name: 'John Doe', email: 'john@example.com' },
-  { id: 2, name: 'Jane Smith', email: 'jane@example.com' },
-  { id: 3, name: 'Bob Johnson', email: 'bob@example.com' }
-];
-// Routes
 
 // Health check
 app.get('/health', (req: Request, res: Response) => {
