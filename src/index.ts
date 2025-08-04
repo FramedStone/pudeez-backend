@@ -2,12 +2,17 @@ import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
+import { Database, User } from './database_handler'
+
 // Get env vars
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3111;
+const DB_NAME = "data.sqlite3";
 
+// Initialize database
+const db = new Database(DB_NAME);
 
 // -- Middlewares --
 app.use(express.json());
@@ -48,11 +53,28 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 // Get the ZK proof from PROVER_URL
-app.post('/api/generate-zkp', (req: Request, res: Response) => {
+app.post('/api/generate_zkp', (req: Request, res: Response) => {
     axios.post(process.env.PROVER_URL || "", req.body, { headers: { 'Content-Type': 'application/json' } })
         .then(prover_response => res.json(prover_response.data))
         .catch(err => console.error(err));
 });
+
+// Insert new address & steamID pair from user
+app.post('/api/user/add', (req: Request, res: Response) => {
+    const userData = req.body as User;
+    db.addRow(userData.address, userData.steamID);
+
+    // no response
+    res.status(200);
+});
+
+app.post('/api/user/get_steamid', (req: Request, res: Response) => {
+    const steamID = db.getSteamID(req.body.address)
+
+    res.status(200).json({
+        steamID: steamID
+    });
+})
 
 // 404 handler
 app.use('/{*any}', (req: Request, res: Response) => {
