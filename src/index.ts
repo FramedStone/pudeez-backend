@@ -1,5 +1,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
+import dotenv from 'dotenv';
+
+// Get env vars
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3111;
