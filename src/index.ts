@@ -2,7 +2,8 @@ import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
-import { Database, User } from './database_handler'
+import { Database, User, AssetRecord } from './database_handler';
+import { SteamAsset, storeAssetOnWalrus, retrieveAssetFromWalrus } from './walrus_handler';
 
 // Get env vars
 dotenv.config();
@@ -75,6 +76,215 @@ app.post('/api/user/get_steamid', (req: Request, res: Response) => {
         steamID: steamID
     });
 })
+
+// Store Steam asset data on Walrus
+app.post('/api/walrus/store', async (req: Request, res: Response) => {
+    try {
+        const assetData = req.body as SteamAsset;
+        
+        // Validate required fields
+        if (!assetData.appid || !assetData.assetid || !assetData.walletAddress || !assetData.icon_url) {
+            return res.status(400).json({ 
+                error: 'Missing required fields: appid, assetid, walletAddress, and icon_url are required' 
+            });
+        }
+
+        // Basic Sui address validation (0x followed by 64 hex characters)
+        const suiAddressRegex = /^0x[a-fA-F0-9]{64}$/;
+        if (!suiAddressRegex.test(assetData.walletAddress)) {
+            return res.status(400).json({
+                error: 'Invalid Sui wallet address format. Must be 0x followed by 64 hex characters'
+            });
+        }
+
+        const blobId = await storeAssetOnWalrus(assetData);
+        
+        if (blobId) {
+            // Store asset record in database
+            const assetRecord: AssetRecord = {
+                walletAddress: assetData.walletAddress,
+                blobId: blobId,
+                appid: assetData.appid,
+                assetid: assetData.assetid,
+                classid: assetData.classid,
+                instanceid: assetData.instanceid,
+                contextid: assetData.contextid,
+                amount: assetData.amount,
+                icon_url: assetData.icon_url,
+                uploadedAt: new Date().toISOString()
+            };
+
+            try {
+                await db.addAsset(assetRecord);
+                res.status(200).json({
+                    success: true,
+                    blobId: blobId,
+                    walletAddress: assetData.walletAddress,
+                    message: 'Asset data stored successfully on Walrus and database'
+                });
+            } catch (dbError) {
+                console.error('Error storing asset in database:', dbError);
+                // Still return success since Walrus storage worked
+                res.status(200).json({
+                    success: true,
+                    blobId: blobId,
+                    walletAddress: assetData.walletAddress,
+                    message: 'Asset data stored on Walrus but failed to update database',
+                    warning: 'Database update failed'
+                });
+            }
+        } else {
+            res.status(500).json({
+                error: 'Failed to store asset data on Walrus'
+            });
+        }
+    } catch (error) {
+        console.error('Error in walrus store endpoint:', error);
+        res.status(500).json({
+            error: 'Internal server error while storing asset data'
+        });
+    }
+});
+
+// Retrieve Steam asset data from Walrus
+app.get('/api/walrus/retrieve/:blobId', async (req: Request, res: Response) => {
+    try {
+        const { blobId } = req.params;
+        
+        if (!blobId) {
+            return res.status(400).json({
+                error: 'Blob ID is required'
+            });
+        }
+
+        const assetData = await retrieveAssetFromWalrus(blobId);
+        
+        res.status(200).json({
+            success: true,
+            data: assetData,
+            blobId: blobId
+        });
+    } catch (error) {
+        console.error('Error in walrus retrieve endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to retrieve asset data from Walrus'
+        });
+    }
+});
+
+// Get all assets for a specific wallet address
+app.get('/api/walrus/assets/:walletAddress', async (req: Request, res: Response) => {
+    try {
+        const { walletAddress } = req.params;
+        
+        if (!walletAddress) {
+            return res.status(400).json({
+                error: 'Wallet address is required'
+            });
+        }
+
+        // Basic Sui address validation
+        const suiAddressRegex = /^0x[a-fA-F0-9]{64}$/;
+        if (!suiAddressRegex.test(walletAddress)) {
+            return res.status(400).json({
+                error: 'Invalid Sui wallet address format'
+            });
+        }
+
+        const assets = await db.getAssetsByWallet(walletAddress);
+        
+        res.status(200).json({
+            success: true,
+            walletAddress: walletAddress,
+            assets: assets,
+            count: assets.length
+        });
+    } catch (error) {
+        console.error('Error in get assets by wallet endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to retrieve assets for wallet address'
+        });
+    }
+});
+
+// Get all assets (with optional pagination)
+app.get('/api/walrus/assets', async (req: Request, res: Response) => {
+    try {
+        const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+        const offset = req.query.offset ? parseInt(req.query.offset as string) : undefined;
+        
+        // Validate pagination parameters
+        if (limit && (limit < 1 || limit > 100)) {
+            return res.status(400).json({
+                error: 'Limit must be between 1 and 100'
+            });
+        }
+        
+        if (offset && offset < 0) {
+            return res.status(400).json({
+                error: 'Offset must be non-negative'
+            });
+        }
+
+        const assets = await db.getAllAssets(limit, offset);
+        
+        res.status(200).json({
+            success: true,
+            assets: assets,
+            count: assets.length,
+            pagination: {
+                limit: limit || null,
+                offset: offset || null
+            }
+        });
+    } catch (error) {
+        console.error('Error in get all assets endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to retrieve assets'
+        });
+    }
+});
+
+// Delete an asset (removes from database, but not from Walrus)
+app.delete('/api/walrus/assets/:blobId', async (req: Request, res: Response) => {
+    try {
+        const { blobId } = req.params;
+        const { walletAddress } = req.body;
+        
+        if (!blobId || !walletAddress) {
+            return res.status(400).json({
+                error: 'Blob ID and wallet address are required'
+            });
+        }
+
+        // Basic Sui address validation
+        const suiAddressRegex = /^0x[a-fA-F0-9]{64}$/;
+        if (!suiAddressRegex.test(walletAddress)) {
+            return res.status(400).json({
+                error: 'Invalid Sui wallet address format'
+            });
+        }
+
+        const deleted = await db.deleteAsset(blobId, walletAddress);
+        
+        if (deleted) {
+            res.status(200).json({
+                success: true,
+                message: 'Asset record deleted successfully from database',
+                note: 'Data still exists on Walrus network'
+            });
+        } else {
+            res.status(404).json({
+                error: 'Asset not found or you do not have permission to delete it'
+            });
+        }
+    } catch (error) {
+        console.error('Error in delete asset endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to delete asset record'
+        });
+    }
+});
 
 // 404 handler
 app.use('/{*any}', (req: Request, res: Response) => {

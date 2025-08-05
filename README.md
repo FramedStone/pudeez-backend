@@ -9,19 +9,20 @@ This backend powers the Pudeez marketplace, handling user auth (zkLogin), produc
 - Sui zkLogin SDK
 - Sui TypeScript SDK
 - Walrus 
-- Running on Sui Devnet
+- SQLite 
 
 ## TODO
 - [X] TypeScript, ESLint, Prettier setup (with Husky for automation if needed)
 - [ ] Business Logic setup
   - [ ] Steam game assets tokenizing
-    - [ ] using their own Steam Web API key? (only if needed)
   - [ ] Escrow process
   - [ ] Marketplace Profit Mechanism
 - [ ] Auth: zkLogin integration, JWT
   - [X] ZKP endpoint
   - [ ] bind with Steam openID
 - [ ] Database integration
+  - [x] listing assets endpoint
+  - [x] retrieving assets endpoint
 - [ ] Marketplace logic: list, buy/sell, auctions
 - [ ] Blockchain integration
   - [ ] Move packages testing
