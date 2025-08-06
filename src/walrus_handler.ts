@@ -15,6 +15,8 @@ export interface SteamAsset {
     amount: string;
     walletAddress: string; // Sui wallet address of the asset owner
     icon_url: string; // Steam asset icon URL
+    name: string; // Steam asset name
+    price: string; // Price in MIST (smallest Sui denomination)
 }
 
 // Walrus storage response interface
@@ -82,7 +84,7 @@ export async function retrieveAssetFromWalrus(blobId: string): Promise<SteamAsse
         const assetData = response.data as SteamAsset;
         
         // Basic validation to ensure we got the expected structure
-        if (!assetData.appid || !assetData.assetid || !assetData.walletAddress || !assetData.icon_url) {
+        if (!assetData.appid || !assetData.assetid || !assetData.walletAddress || !assetData.icon_url || !assetData.name || !assetData.price) {
             throw new Error('Invalid asset data structure retrieved from Walrus');
         }
         
