@@ -190,15 +190,15 @@ app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => 
     }
 });
 
-// Store Steam asset data on Walrus
-app.post('/api/walrus/store', async (req: Request, res: Response) => {
+// List Steam asset data on Walrus
+app.post('/api/walrus/list', async (req: Request, res: Response) => {
     try {
         const assetData = req.body as SteamAsset;
         
         // Validate required fields
-        if (!assetData.appid || !assetData.assetid || !assetData.walletAddress || !assetData.icon_url) {
+        if (!assetData.appid || !assetData.assetid || !assetData.walletAddress || !assetData.icon_url || !assetData.name || !assetData.price) {
             return res.status(400).json({ 
-                error: 'Missing required fields: appid, assetid, walletAddress, and icon_url are required' 
+                error: 'Missing required fields: appid, assetid, walletAddress, icon_url, name, and price are required' 
             });
         }
 
@@ -207,6 +207,14 @@ app.post('/api/walrus/store', async (req: Request, res: Response) => {
         if (!suiAddressRegex.test(assetData.walletAddress)) {
             return res.status(400).json({
                 error: 'Invalid Sui wallet address format. Must be 0x followed by 64 hex characters'
+            });
+        }
+
+        // Validate price format (should be a valid number in MIST)
+        const priceNumber = parseFloat(assetData.price);
+        if (isNaN(priceNumber) || priceNumber < 0) {
+            return res.status(400).json({
+                error: 'Invalid price format. Price must be a valid non-negative number in MIST'
             });
         }
 
@@ -224,6 +232,8 @@ app.post('/api/walrus/store', async (req: Request, res: Response) => {
                 contextid: assetData.contextid,
                 amount: assetData.amount,
                 icon_url: assetData.icon_url,
+                name: assetData.name,
+                price: assetData.price,
                 uploadedAt: new Date().toISOString()
             };
 
@@ -233,7 +243,7 @@ app.post('/api/walrus/store', async (req: Request, res: Response) => {
                     success: true,
                     blobId: blobId,
                     walletAddress: assetData.walletAddress,
-                    message: 'Asset data stored successfully on Walrus and database'
+                    message: 'Asset data listed successfully on Walrus and database'
                 });
             } catch (dbError) {
                 console.error('Error storing asset in database:', dbError);
@@ -242,19 +252,19 @@ app.post('/api/walrus/store', async (req: Request, res: Response) => {
                     success: true,
                     blobId: blobId,
                     walletAddress: assetData.walletAddress,
-                    message: 'Asset data stored on Walrus but failed to update database',
+                    message: 'Asset data listed on Walrus but failed to update database',
                     warning: 'Database update failed'
                 });
             }
         } else {
             res.status(500).json({
-                error: 'Failed to store asset data on Walrus'
+                error: 'Failed to list asset data on Walrus'
             });
         }
     } catch (error) {
-        console.error('Error in walrus store endpoint:', error);
+        console.error('Error in walrus list endpoint:', error);
         res.status(500).json({
-            error: 'Internal server error while storing asset data'
+            error: 'Internal server error while listing asset data'
         });
     }
 });
