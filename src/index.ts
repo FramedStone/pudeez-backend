@@ -127,20 +127,41 @@ app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => 
             descriptionsMap.set(key, desc);
         });
 
-        // Merge assets with descriptions to get icon_url
-        const inventoryAssets = inventoryData.assets.map(asset => {
+        // Merge assets with descriptions to get icon_url and name
+        const inventoryAssets = [];
+        for (const asset of inventoryData.assets) {
             const key = `${asset.classid}_${asset.instanceid}`;
             const description = descriptionsMap.get(key);
             
-            return {
+            // Check if description exists and has required fields
+            if (!description) {
+                return res.status(500).json({
+                    error: `Missing description data for asset ${asset.assetid} (classid: ${asset.classid}, instanceid: ${asset.instanceid})`
+                });
+            }
+            
+            if (!description.icon_url) {
+                return res.status(500).json({
+                    error: `Missing icon_url for asset ${asset.assetid} (classid: ${asset.classid}, instanceid: ${asset.instanceid})`
+                });
+            }
+            
+            if (!description.name) {
+                return res.status(500).json({
+                    error: `Missing name for asset ${asset.assetid} (classid: ${asset.classid}, instanceid: ${asset.instanceid})`
+                });
+            }
+            
+            inventoryAssets.push({
                 contextid: asset.contextid,
                 assetid: asset.assetid,
                 classid: asset.classid,
                 instanceid: asset.instanceid,
                 amount: asset.amount,
-                icon_url: description?.icon_url || '' // Default to empty string if no description found
-            };
-        });
+                icon_url: description.icon_url,
+                name: description.name
+            });
+        }
 
         res.status(200).json({
             appid: appid,

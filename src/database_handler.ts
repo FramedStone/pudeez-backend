@@ -58,6 +58,7 @@ export interface SteamInventoryItem {
     instanceid: string;
     amount: string;
     icon_url: string;
+    name: string;
 }
 
 export class Database {
