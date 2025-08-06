@@ -23,6 +23,43 @@ export interface AssetRecord {
     uploadedAt: string;
 }
 
+export interface SteamAssetResponse {
+    appid: number;
+    contextid: string;
+    assetid: string;
+    classid: string;
+    instanceid: string;
+    amount: string;
+}
+
+export interface SteamDescriptionResponse {
+    appid: number;
+    classid: string;
+    instanceid: string;
+    icon_url: string;
+    market_hash_name?: string;
+    name?: string;
+    type?: string;
+    [key: string]: any; // Allow for other properties
+}
+
+export interface SteamInventoryResponse {
+    assets?: SteamAssetResponse[];
+    descriptions?: SteamDescriptionResponse[];
+    success: number;
+    error?: string;
+}
+
+export interface SteamInventoryItem {
+    appid: number;
+    contextid: string;
+    assetid: string;
+    classid: string;
+    instanceid: string;
+    amount: string;
+    icon_url: string;
+}
+
 export class Database {
     rawDb: sqlite3.Database;
 
