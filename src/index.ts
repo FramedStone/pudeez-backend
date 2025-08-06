@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
-import { Database, User, AssetRecord } from './database_handler';
+import { Database, User, AssetRecord, SteamInventoryResponse } from './database_handler';
 import { SteamAsset, storeAssetOnWalrus, retrieveAssetFromWalrus } from './walrus_handler';
 
 // Get env vars
@@ -76,6 +76,98 @@ app.post('/api/user/get_steamid', (req: Request, res: Response) => {
         steamID: steamID
     });
 })
+
+// Get Steam inventory for a user
+app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => {
+    try {
+        const { steamID } = req.params;
+        const appid = req.query.appid ? parseInt(req.query.appid as string) : 730; // Default to CS:GO
+        const contextid = req.query.contextid ? parseInt(req.query.contextid as string) : 2; // Default context
+
+        // Validate steamID (should be numeric)
+        if (!steamID || !/^\d+$/.test(steamID)) {
+            return res.status(400).json({
+                error: 'Invalid Steam ID format. Must be numeric.'
+            });
+        }
+
+        // Validate appid and contextid
+        if (appid < 1 || contextid < 1) {
+            return res.status(400).json({
+                error: 'Invalid appid or contextid. Must be positive integers.'
+            });
+        }
+
+        const steamApiUrl = `https://steamcommunity.com/inventory/${steamID}/${appid}/${contextid}`;
+        
+        console.log(`Fetching Steam inventory from: ${steamApiUrl}`);
+        
+        const response = await axios.get<SteamInventoryResponse>(steamApiUrl);
+        const inventoryData = response.data;
+
+        // Check if Steam API returned success
+        if (!inventoryData.success || inventoryData.success !== 1) {
+            return res.status(404).json({
+                error: inventoryData.error || 'Steam inventory not found or private'
+            });
+        }
+
+        // Check if assets and descriptions exist
+        if (!inventoryData.assets || !inventoryData.descriptions) {
+            return res.status(200).json({
+                appid: appid,
+                assets: []
+            });
+        }
+
+        // Create a map of descriptions for faster lookup
+        const descriptionsMap = new Map<string, typeof inventoryData.descriptions[0]>();
+        inventoryData.descriptions.forEach(desc => {
+            const key = `${desc.classid}_${desc.instanceid}`;
+            descriptionsMap.set(key, desc);
+        });
+
+        // Merge assets with descriptions to get icon_url
+        const inventoryAssets = inventoryData.assets.map(asset => {
+            const key = `${asset.classid}_${asset.instanceid}`;
+            const description = descriptionsMap.get(key);
+            
+            return {
+                contextid: asset.contextid,
+                assetid: asset.assetid,
+                classid: asset.classid,
+                instanceid: asset.instanceid,
+                amount: asset.amount,
+                icon_url: description?.icon_url || '' // Default to empty string if no description found
+            };
+        });
+
+        res.status(200).json({
+            appid: appid,
+            assets: inventoryAssets
+        });
+
+    } catch (error) {
+        console.error('Error fetching Steam inventory:', error);
+        
+        // Handle axios errors specifically
+        if (axios.isAxiosError(error)) {
+            if (error.response?.status === 403) {
+                return res.status(403).json({
+                    error: 'Steam inventory is private or user not found'
+                });
+            } else if (error.response?.status === 500) {
+                return res.status(502).json({
+                    error: 'Steam API is currently unavailable'
+                });
+            }
+        }
+        
+        res.status(500).json({
+            error: 'Failed to fetch Steam inventory'
+        });
+    }
+});
 
 // Store Steam asset data on Walrus
 app.post('/api/walrus/store', async (req: Request, res: Response) => {
