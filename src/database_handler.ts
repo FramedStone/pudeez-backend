@@ -127,6 +127,10 @@ export class Database {
      * Add a new row with address (hex) and steamID (decimal)
      */
     addRow(address: string, steamID: string, callback: (err: Error | null) => void): void {
+        if (!address) {
+            callback(new Error('Address is required for addRow'));
+            return;
+        }
         const normalizedAddress = address.trim().toLowerCase();
         const insertQuery = `INSERT INTO ${TABLE_NAME} (address, steamID) VALUES (?, ?)`;
         console.log('[addRow] SQL:', insertQuery, 'Params:', [normalizedAddress, steamID]);
@@ -143,6 +147,10 @@ export class Database {
      * Get steamID from address
      */
     getSteamID(address: string, callback: (err: Error | null, steamID?: string) => void): void {
+        if (!address) {
+            callback(new Error('Address is required for getSteamID'));
+            return;
+        }
         const normalizedAddress = address.trim().toLowerCase();
         const selectQuery = `SELECT steamID FROM ${TABLE_NAME} WHERE address = ?`;
         console.log('[getSteamID] SQL:', selectQuery, 'Params:', [normalizedAddress]);
