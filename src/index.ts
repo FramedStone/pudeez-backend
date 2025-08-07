@@ -127,7 +127,14 @@ app.get('/health', (req: Request, res: Response) => {
 app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to the Express.js TypeScript API!' });
 });
-
+app.get('/test/getAllUsers', async (req: Request, res: Response) => {
+  try {
+    const users = await db.getAllUsers();
+    res.status(200).json({ success: true, users });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch users' });
+  }
+});
 // Steam Authentication Routes
 app.get('/auth/steam/login', (req: Request, res: Response, next: NextFunction) => {
     if (!STEAM_API_KEY) {
@@ -193,7 +200,7 @@ app.get('/auth/steam/error', (req: Request, res: Response) => {
 // Insert new address & steamID pair from user
 app.post('/api/user/add', (req: Request, res: Response) => {
     const userData = req.body as User;
-    db.addRow(userData.address, userData.steamID, (err) => {
+    db.addRow(userData.address, String(userData.steamID), (err: Error | null) => {
         if (err) {
             console.error('Error adding user:', err);
             if ((err as any).code === 'SQLITE_CONSTRAINT') {
@@ -209,8 +216,14 @@ app.post('/api/user/add', (req: Request, res: Response) => {
 });
 
 app.post('/api/user/get_steamid', (req: Request, res: Response) => {
-    db.getSteamID(req.body.address, (err, steamID) => {
-        if (err) return res.status(500).json({ error: err.message });
+    const address = req.body.address;
+    console.log('[get_steamid] Received address:', address);
+    db.getSteamID(address, (err: Error | null, steamID?: string) => {
+        if (err) {
+            console.error('[get_steamid] DB error:', err);
+            return res.status(500).json({ error: err.message });
+        }
+        console.log('[get_steamid] Returning steamID:', steamID, 'for address:', address);
         res.status(200).json({ steamID });
     });
 })
@@ -219,8 +232,8 @@ app.post('/api/user/get_steamid', (req: Request, res: Response) => {
 app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => {
     try {
         const { steamID } = req.params;
-        const appid = req.query.appid ? parseInt(req.query.appid as string) : 730; // Default to CS:GO
-        const contextid = req.query.contextid ? parseInt(req.query.contextid as string) : 2; // Default context
+        const appid = req.query.appid ? parseInt(req.query.appid as string) : 730;
+        const contextid = req.query.contextid ? parseInt(req.query.contextid as string) : 2;
 
         // Validate steamID (should be numeric)
         if (!steamID || !/^\d+$/.test(steamID)) {
@@ -229,89 +242,66 @@ app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => 
             });
         }
 
-        // Validate appid and contextid
-        if (appid < 1 || contextid < 1) {
-            return res.status(400).json({
-                error: 'Invalid appid or contextid. Must be positive integers.'
-            });
-        }
-
         const steamApiUrl = `https://steamcommunity.com/inventory/${steamID}/${appid}/${contextid}`;
         
         console.log(`Fetching Steam inventory from: ${steamApiUrl}`);
         
-        const response = await axios.get<SteamInventoryResponse>(steamApiUrl);
+        // Add proper headers to mimic browser request
+        const response = await axios.get<SteamInventoryResponse>(steamApiUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'same-origin',
+                'Referer': `https://steamcommunity.com/profiles/${steamID}/inventory/`
+            },
+            timeout: 10000 // 10 second timeout
+        });
+        
         const inventoryData = response.data;
 
-        // Check if Steam API returned success
         if (!inventoryData.success || inventoryData.success !== 1) {
             return res.status(404).json({
                 error: inventoryData.error || 'Steam inventory not found or private'
             });
         }
 
-        // Check if assets and descriptions exist
-        if (!inventoryData.assets || !inventoryData.descriptions) {
-            return res.status(200).json({
-                appid: appid,
-                assets: []
-            });
-        }
-
-        // Create a map of descriptions for faster lookup
-        const descriptionsMap = new Map<string, typeof inventoryData.descriptions[0]>();
-        inventoryData.descriptions.forEach(desc => {
-            const key = `${desc.classid}_${desc.instanceid}`;
-            descriptionsMap.set(key, desc);
-        });
-
-        // Merge assets with descriptions to get icon_url and name
-        const inventoryAssets = [];
-        for (const asset of inventoryData.assets) {
-            const key = `${asset.classid}_${asset.instanceid}`;
-            const description = descriptionsMap.get(key);
-            
-            // Check if description exists and has required fields
-            if (!description) {
-                return res.status(500).json({
-                    error: `Missing description data for asset ${asset.assetid} (classid: ${asset.classid}, instanceid: ${asset.instanceid})`
-                });
-            }
-            
-            if (!description.icon_url) {
-                return res.status(500).json({
-                    error: `Missing icon_url for asset ${asset.assetid} (classid: ${asset.classid}, instanceid: ${asset.instanceid})`
-                });
-            }
-            
-            if (!description.name) {
-                return res.status(500).json({
-                    error: `Missing name for asset ${asset.assetid} (classid: ${asset.classid}, instanceid: ${asset.instanceid})`
-                });
-            }
-            
-            inventoryAssets.push({
-                contextid: asset.contextid,
+        // Merge assets and descriptions for frontend
+        const assets = (inventoryData.assets || []).map(asset => {
+            // Find matching description by classid and instanceid
+            const desc = (inventoryData.descriptions || []).find(d =>
+                d.classid === asset.classid && d.instanceid === asset.instanceid
+            );
+            return {
                 assetid: asset.assetid,
                 classid: asset.classid,
                 instanceid: asset.instanceid,
+                contextid: asset.contextid,
+                appid: asset.appid,
                 amount: asset.amount,
-                icon_url: description.icon_url,
-                name: description.name
-            });
-        }
-
-        res.status(200).json({
-            appid: appid,
-            assets: inventoryAssets
+                icon_url: desc?.icon_url || '',
+                name: desc?.name || desc?.market_hash_name || '',
+                type: desc?.type || '',
+                // Add more fields if needed
+            };
         });
 
+        res.json({ assets });
     } catch (error) {
         console.error('Error fetching Steam inventory:', error);
         
-        // Handle axios errors specifically
         if (axios.isAxiosError(error)) {
-            if (error.response?.status === 403) {
+            if (error.response?.status === 401) {
+                return res.status(403).json({
+                    error: 'Steam inventory is private or requires authentication'
+                });
+            } else if (error.response?.status === 403) {
                 return res.status(403).json({
                     error: 'Steam inventory is private or user not found'
                 });

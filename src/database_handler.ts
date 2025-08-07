@@ -6,7 +6,7 @@ const ASSETS_TABLE_NAME = "assets";
 
 export interface User {
     address: string,
-    steamID: number
+    steamID: string
 }
 
 export interface AssetRecord {
@@ -63,13 +63,14 @@ export interface SteamInventoryItem {
     name: string;
 }
 
+
 export class Database {
     rawDb: sqlite3.Database;
 
     constructor(filename: string) {
         this.rawDb = new sqlite3.Database(filename);
         this.initializeUserTable();
-        this.initializeAssetTable();
+        this.initializeAssetsTable();
     }
 
     /**
@@ -79,7 +80,7 @@ export class Database {
         const createUserTable = `
             CREATE TABLE IF NOT EXISTS user (
                 address TEXT PRIMARY KEY,
-                steamID INTEGER
+                steamID TEXT
             )
         `;
         this.rawDb.exec(createUserTable, (err: Error | null) => {
@@ -94,7 +95,7 @@ export class Database {
     /**
      * Initialize the assets table if it doesn't exist
      */
-    private initializeAssetTable(): void {
+    private initializeAssetsTable(): void {
         const createAssetsTable = `
             CREATE TABLE IF NOT EXISTS ${ASSETS_TABLE_NAME} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +114,6 @@ export class Database {
                 UNIQUE(walletAddress, assetid)
             )
         `;
-        
         this.rawDb.exec(createAssetsTable, (err: Error | null) => {
             if (err) {
                 console.error('Error creating assets table:', err);
@@ -126,28 +126,35 @@ export class Database {
     /**
      * Add a new row with address (hex) and steamID (decimal)
      */
-    addRow(address: string, steamID: number, callback: (err: Error | null) => void): void {
-        this.rawDb.exec(
-            `INSERT INTO ${TABLE_NAME} VALUES ('${address}', ${steamID})`,
+    addRow(address: string, steamID: string, callback: (err: Error | null) => void): void {
+        const normalizedAddress = address.trim().toLowerCase();
+        const insertQuery = `INSERT INTO ${TABLE_NAME} (address, steamID) VALUES (?, ?)`;
+        console.log('[addRow] SQL:', insertQuery, 'Params:', [normalizedAddress, steamID]);
+        this.rawDb.run(
+            insertQuery,
+            [normalizedAddress, steamID],
             (err: Error | null) => {
                 callback(err);
             }
-        )
+        );
     }
 
     /**
      * Get steamID from address
      */
-getSteamID(address: string, callback: (err: Error | null, steamID?: number) => void): void {
-    this.rawDb.get(
-        `SELECT steamID FROM ${TABLE_NAME} WHERE address = ?`,
-        [address],
-        (err: Error | null, row: User) => {
-            if (err) return callback(err);
-            callback(null, row ? row.steamID : undefined);
-        }
-    );
-}
+    getSteamID(address: string, callback: (err: Error | null, steamID?: string) => void): void {
+        const normalizedAddress = address.trim().toLowerCase();
+        const selectQuery = `SELECT steamID FROM ${TABLE_NAME} WHERE address = ?`;
+        console.log('[getSteamID] SQL:', selectQuery, 'Params:', [normalizedAddress]);
+        this.rawDb.get(
+            selectQuery,
+            [normalizedAddress],
+            (err: Error | null, row: User) => {
+                if (err) return callback(err);
+                callback(null, row ? String(row.steamID) : undefined);
+            }
+        );
+    }
 
     /**
      * Add a new asset record to the database
@@ -276,6 +283,23 @@ getSteamID(address: string, callback: (err: Error | null, steamID?: number) => v
                     reject(err);
                 } else {
                     resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    /**
+     * Get all users in the database
+     */
+    getAllUsers(): Promise<User[]> {
+        return new Promise((resolve, reject) => {
+            const query = `SELECT * FROM ${TABLE_NAME}`;
+            this.rawDb.all(query, [], (err: Error | null, rows: User[]) => {
+                if (err) {
+                    console.error('Error fetching all users:', err);
+                    reject(err);
+                } else {
+                    resolve(rows || []);
                 }
             });
         });
