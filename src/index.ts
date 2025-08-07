@@ -237,39 +237,27 @@ app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => 
 
         // Validate steamID (should be numeric)
         if (!steamID || !/^\d+$/.test(steamID)) {
-            return res.status(400).json({
+            res.status(400).json({
                 error: 'Invalid Steam ID format. Must be numeric.'
             });
+            return;
         }
 
         const steamApiUrl = `https://steamcommunity.com/inventory/${steamID}/${appid}/${contextid}`;
-        
         console.log(`Fetching Steam inventory from: ${steamApiUrl}`);
-        
-        // Add proper headers to mimic browser request
+
         const response = await axios.get<SteamInventoryResponse>(steamApiUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-origin',
-                'Referer': `https://steamcommunity.com/profiles/${steamID}/inventory/`
-            },
             timeout: 10000 // 10 second timeout
         });
-        
+
         const inventoryData = response.data;
+        // Removed full raw response log for clarity
 
         if (!inventoryData.success || inventoryData.success !== 1) {
-            return res.status(404).json({
+            res.status(404).json({
                 error: inventoryData.error || 'Steam inventory not found or private'
             });
+            return;
         }
 
         // Merge assets and descriptions for frontend
@@ -278,6 +266,9 @@ app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => 
             const desc = (inventoryData.descriptions || []).find(d =>
                 d.classid === asset.classid && d.instanceid === asset.instanceid
             );
+            if (!desc) {
+                console.warn(`[Inventory Merge Warning] No description found for assetid=${asset.assetid}, classid=${asset.classid}, instanceid=${asset.instanceid}`);
+            }
             return {
                 assetid: asset.assetid,
                 classid: asset.classid,
@@ -292,29 +283,49 @@ app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => 
             };
         });
 
+        // console.log('[Merged assets output]', JSON.stringify(assets, null, 2));
         res.json({ assets });
+        return;
     } catch (error) {
-        console.error('Error fetching Steam inventory:', error);
-        
+        // Enhanced error logging
         if (axios.isAxiosError(error)) {
+            console.error('Error fetching Steam inventory (AxiosError):', {
+                message: error.message,
+                code: error.code,
+                status: error.response?.status,
+                data: error.response?.data,
+                headers: error.response?.headers,
+                config: error.config,
+            });
             if (error.response?.status === 401) {
-                return res.status(403).json({
+                res.status(403).json({
                     error: 'Steam inventory is private or requires authentication'
                 });
+                return;
             } else if (error.response?.status === 403) {
-                return res.status(403).json({
+                res.status(403).json({
                     error: 'Steam inventory is private or user not found'
                 });
+                return;
             } else if (error.response?.status === 500) {
-                return res.status(502).json({
+                res.status(502).json({
                     error: 'Steam API is currently unavailable'
                 });
+                return;
+            } else {
+                // Log and return the error from Steam API if available
+                res.status(error.response?.status || 500).json({
+                    error: error.response?.data || error.message || 'Unknown error from Steam API'
+                });
+                return;
             }
+        } else {
+            console.error('Error fetching Steam inventory (Non-Axios):', error);
         }
-        
         res.status(500).json({
             error: 'Failed to fetch Steam inventory'
         });
+        return;
     }
 });
 
@@ -540,6 +551,21 @@ app.delete('/api/walrus/assets/:blobId', async (req: Request, res: Response) => 
 // 404 handler
 app.use('/{*any}', (req: Request, res: Response) => {
   res.status(404).json({ error: 'Route not found' });
+});
+
+// Global error handler (should be after all routes)
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+    console.error('[Express][Global Error Handler]', err);
+    if (res.headersSent) {
+        return next(err);
+    }
+    res.status(500).json({ error: 'Internal Server Error', details: err.message });
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    console.log(`Visit http://localhost:${PORT} to get started`);
 });
 
 
