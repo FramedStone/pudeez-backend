@@ -68,7 +68,27 @@ export class Database {
 
     constructor(filename: string) {
         this.rawDb = new sqlite3.Database(filename);
+        this.initializeUserTable();
         this.initializeAssetTable();
+    }
+
+    /**
+     * Initialize the user table if it doesn't exist
+     */
+    private initializeUserTable(): void {
+        const createUserTable = `
+            CREATE TABLE IF NOT EXISTS user (
+                address TEXT PRIMARY KEY,
+                steamID INTEGER
+            )
+        `;
+        this.rawDb.exec(createUserTable, (err: Error | null) => {
+            if (err) {
+                console.error('Error creating user table:', err);
+            } else {
+                console.log('User table initialized successfully');
+            }
+        });
     }
 
     /**
@@ -106,11 +126,11 @@ export class Database {
     /**
      * Add a new row with address (hex) and steamID (decimal)
      */
-    addRow(address: string, steamID: number): void {
+    addRow(address: string, steamID: number, callback: (err: Error | null) => void): void {
         this.rawDb.exec(
             `INSERT INTO ${TABLE_NAME} VALUES ('${address}', ${steamID})`,
             (err: Error | null) => {
-                console.error(err)
+                callback(err);
             }
         )
     }

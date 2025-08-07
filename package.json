@@ -16,10 +16,12 @@
   "packageManager": "pnpm@10.13.1",
   "dependencies": {
     "@mysten/sui": "^1.37.1",
+    "@types/connect-sqlite3": "^0.9.5",
     "@types/express-session": "^1.18.2",
     "@types/passport": "^1.0.17",
     "@types/passport-steam": "^1.0.6",
     "axios": "^1.11.0",
+    "connect-sqlite3": "^0.9.16",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "express-session": "^1.18.2",

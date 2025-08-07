@@ -1,9 +1,34 @@
 import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import session from 'express-session';
+import SQLiteStoreFactory from 'connect-sqlite3';
+
+// Extend express-session types to include walletAddress
+import 'express-session';
+declare module 'express-session' {
+  interface SessionData {
+    walletAddress?: string;
+  }
+}
+import passport from 'passport';
+import SteamStrategy from 'passport-steam';
 
 import { Database, User, AssetRecord, SteamInventoryResponse } from './database_handler';
 import { SteamAsset, storeAssetOnWalrus, retrieveAssetFromWalrus } from './walrus_handler';
+import { randomUUID } from 'crypto';
+
+// Temporary in-memory token store for walletAddress
+const steamLoginTokenMap = new Map<string, string>();
+
+// Steam user profile interface
+interface SteamProfile {
+  id: string;
+  displayName: string;
+  profileUrl: string;
+  photos: Array<{ value: string }>;
+  _json: Record<string, unknown>;
+}
 
 // Get env vars
 dotenv.config();
@@ -12,19 +37,69 @@ const app = express();
 const PORT = process.env.PORT || 3111;
 const DB_NAME = "data.sqlite3";
 
+// Steam API key validation
+const STEAM_API_KEY = process.env.STEAM_API_KEY;
+if (!STEAM_API_KEY) {
+  console.warn('STEAM_API_KEY is not set in environment variables. Steam authentication will not work.');
+}
+
 // Initialize database
 const db = new Database(DB_NAME);
+
+// Configure passport for Steam authentication
+passport.serializeUser((user: unknown, done) => done(null, user));
+passport.deserializeUser((obj: unknown, done) => done(null, obj as Express.User));
+
+if (STEAM_API_KEY) {
+  passport.use(new SteamStrategy(
+    {
+      returnURL: `http://localhost:${PORT}/auth/steam/return`,
+      realm: `http://localhost:${PORT}/`,
+      apiKey: STEAM_API_KEY,
+    },
+    function (identifier, profile, done) {
+      // profile.id is the SteamID
+      return done(null, profile);
+    }
+  ));
+}
 
 // -- Middlewares --
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Persistent session store using SQLite
+const SQLiteStore = SQLiteStoreFactory(session);
+app.use(session({ 
+  store: new SQLiteStore({ db: 'sessions.sqlite3', dir: './' }) as any,
+  secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production', 
+  resave: false, 
+  saveUninitialized: true,
+  cookie: {
+    secure: false, // Set to true if using HTTPS
+    sameSite: 'lax', // Use 'none' and secure: true if using HTTPS and cross-site
+  }
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
 // CORS middleware
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+if (FRONTEND_URL === '*') {
+  console.warn('CORS is set to allow all origins. Set FRONTEND_URL in your environment for better security.');
+}
 app.use((req: Request, res: Response, next: NextFunction) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', FRONTEND_URL);
+  res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  next();
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
 });
 
 // Error handling middleware
@@ -53,20 +128,84 @@ app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to the Express.js TypeScript API!' });
 });
 
-// Get the ZK proof from PROVER_URL
-app.post('/api/generate_zkp', (req: Request, res: Response) => {
-    axios.post(process.env.PROVER_URL || "", req.body, { headers: { 'Content-Type': 'application/json' } })
-        .then(prover_response => res.json(prover_response.data))
-        .catch(err => console.error(err));
+// Steam Authentication Routes
+app.get('/auth/steam/login', (req: Request, res: Response, next: NextFunction) => {
+    if (!STEAM_API_KEY) {
+        return res.status(500).json({ 
+            error: 'Steam authentication is not configured. STEAM_API_KEY is missing.' 
+        });
+    }
+    const { walletAddress } = req.query;
+    if (!walletAddress || typeof walletAddress !== 'string') {
+        return res.status(400).json({ error: 'walletAddress is required as a query parameter' });
+    }
+    // Generate a random token and store the mapping
+    const token = randomUUID();
+    steamLoginTokenMap.set(token, walletAddress);
+    // Redirect to Steam login with token as query param
+    const redirectUrl = `/auth/steam?token=${encodeURIComponent(token)}`;
+    res.redirect(redirectUrl);
+});
+
+// passport-steam default route 
+app.get('/auth/steam', (req, res, next) => {
+    const token = req.query.token as string | undefined;
+    const returnURL = token
+        ? `http://localhost:${PORT}/auth/steam/return/${encodeURIComponent(token)}`
+        : `http://localhost:${PORT}/auth/steam/return`;
+    console.log('[DEBUG] passport-steam returnURL:', returnURL);
+    passport.authenticate('steam', { returnURL } as any)(req, res, next);
+});
+
+app.get('/auth/steam/return',
+    passport.authenticate('steam', { failureRedirect: '/auth/steam/error' }),
+    async (req: Request, res: Response) => {
+        const steamUser = req.user as SteamProfile;
+        const steamId = steamUser?.id;
+        
+        console.log('Steam authentication successful:', {
+            steamId: steamId,
+            displayName: steamUser?.displayName,
+            photos: steamUser?.photos
+        });
+        
+        // Redirect to frontend after successful Steam authentication, passing steamId and displayName
+        const redirectUrl = `${FRONTEND_URL}/?steamId=${encodeURIComponent(steamId ?? '')}&displayName=${encodeURIComponent(steamUser?.displayName ?? '')}`;
+        res.redirect(redirectUrl);
+        // res.json({
+        //     success: true,
+        //     message: 'Steam authentication successful',
+        //     steamId: steamId,
+        //     displayName: steamUser?.displayName,
+        //     profileUrl: steamUser?.profileUrl,
+        //     avatar: steamUser?.photos?.[0]?.value
+        // });
+    }
+);
+
+app.get('/auth/steam/error', (req: Request, res: Response) => {
+    res.status(401).json({ 
+        error: 'Steam authentication failed',
+        message: 'Unable to authenticate with Steam. Please try again.'
+    });
 });
 
 // Insert new address & steamID pair from user
 app.post('/api/user/add', (req: Request, res: Response) => {
     const userData = req.body as User;
-    db.addRow(userData.address, userData.steamID);
-
-    // no response
-    res.status(200);
+    db.addRow(userData.address, userData.steamID, (err) => {
+        if (err) {
+            console.error('Error adding user:', err);
+            if ((err as any).code === 'SQLITE_CONSTRAINT') {
+                res.status(409).json({ success: false, error: 'User address already exists', details: err.message });
+            } else {
+                res.status(500).json({ success: false, error: 'Failed to add user', details: err.message });
+            }
+        } else {
+            console.log('User added successfully:', userData);
+            res.status(200).json({ success: true, message: 'User added successfully' });
+        }
+    });
 });
 
 app.post('/api/user/get_steamid', (req: Request, res: Response) => {

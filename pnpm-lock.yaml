@@ -11,6 +11,9 @@ importers:
       '@mysten/sui':
         specifier: ^1.37.1
         version: 1.37.1(typescript@5.9.2)
+      '@types/connect-sqlite3':
+        specifier: ^0.9.5
+        version: 0.9.5
       '@types/express-session':
         specifier: ^1.18.2
         version: 1.18.2
@@ -23,6 +26,9 @@ importers:
       axios:
         specifier: ^1.11.0
         version: 1.11.0
+      connect-sqlite3:
+        specifier: ^0.9.16
+        version: 0.9.16
       dotenv:
         specifier: ^17.2.1
         version: 17.2.1
@@ -366,6 +372,9 @@ packages:
 
   '@types/connect-history-api-fallback@1.5.4':
     resolution: {integrity: sha512-n6Cr2xS1h4uAulPRdlw6Jl6s1oG8KrVilPN2yUITEs+K48EzMJJ3W1xy8K5eWuFvjp3R74AOIGSmp2UfBJ8HFw==}
+
+  '@types/connect-sqlite3@0.9.5':
+    resolution: {integrity: sha512-T9HqA7a+eOSM+0ktRZbS1z7WOsRw0ZF3gaQjaExEN8wOnjmnPClkCgM815ta7vyeDF7wxL3aPmDOwrWuYKMr+g==}
 
   '@types/connect@3.4.38':
     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
@@ -841,6 +850,10 @@ packages:
   connect-history-api-fallback@2.0.0:
     resolution: {integrity: sha512-U73+6lQFmfiNPrYbXqr6kZ1i1wiRqXnp2nhMsINseWXO8lDau0LGEffJ8kQi4EjLZympVgRdvqjAgiZ1tgzDDA==}
     engines: {node: '>=0.8'}
+
+  connect-sqlite3@0.9.16:
+    resolution: {integrity: sha512-2gqo0QmcBBL8p8+eqpBETn7RgM/PaoKvpQGl8PfjEgwlr0VuMYNMxRJRrRCo3KR3fxMYeSsCw2tGNG0JKN9Nvg==}
+    engines: {node: '>=0.4.x'}
 
   console-control-strings@1.1.0:
     resolution: {integrity: sha512-ty/fTekppD2fIwRvnZAVdeOiGd1c7YXEixbgJTNzqcxJWKQnjJ/V1bNEEE6hygpM3WjwHFUVK6HTjWSzV4a8sQ==}
@@ -2856,6 +2869,10 @@ snapshots:
       '@types/express-serve-static-core': 4.19.6
       '@types/node': 24.1.0
 
+  '@types/connect-sqlite3@0.9.5':
+    dependencies:
+      '@types/express': 5.0.3
+
   '@types/connect@3.4.38':
     dependencies:
       '@types/node': 24.1.0
@@ -3475,6 +3492,13 @@ snapshots:
       yargs: 17.7.2
 
   connect-history-api-fallback@2.0.0: {}
+
+  connect-sqlite3@0.9.16:
+    dependencies:
+      sqlite3: 5.1.7
+    transitivePeerDependencies:
+      - bluebird
+      - supports-color
 
   console-control-strings@1.1.0:
     optional: true
