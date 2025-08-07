@@ -209,10 +209,9 @@ app.post('/api/user/add', (req: Request, res: Response) => {
 });
 
 app.post('/api/user/get_steamid', (req: Request, res: Response) => {
-    const steamID = db.getSteamID(req.body.address)
-
-    res.status(200).json({
-        steamID: steamID
+    db.getSteamID(req.body.address, (err, steamID) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.status(200).json({ steamID });
     });
 })
 

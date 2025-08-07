@@ -138,18 +138,16 @@ export class Database {
     /**
      * Get steamID from address
      */
-    getSteamID(address: string): number | undefined {
-        let result;
-        this.rawDb.get(
-            `SELECT steam_id FROM ${TABLE_NAME} WHERE address = ${address}`,
-            (err: Error | null, row: User) => {
-                if (row)
-                    result = row.address;
-            }
-        );
-
-        return result;
-    }
+getSteamID(address: string, callback: (err: Error | null, steamID?: number) => void): void {
+    this.rawDb.get(
+        `SELECT steamID FROM ${TABLE_NAME} WHERE address = ?`,
+        [address],
+        (err: Error | null, row: User) => {
+            if (err) return callback(err);
+            callback(null, row ? row.steamID : undefined);
+        }
+    );
+}
 
     /**
      * Add a new asset record to the database
