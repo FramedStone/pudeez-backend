@@ -568,11 +568,4 @@ app.listen(PORT, () => {
     console.log(`Visit http://localhost:${PORT} to get started`);
 });
 
-
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Visit http://localhost:${PORT} to get started`);
-});
-
 export default app;
