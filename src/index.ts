@@ -503,6 +503,8 @@ app.post('/api/walrus/list', async (req: Request, res: Response) => {
                 icon_url: assetData.icon_url,
                 name: assetData.name,
                 price: assetData.price,
+                steamID: assetData.steamID,
+                steamName: assetData.steamName,
                 uploadedAt: new Date().toISOString()
             };
 
@@ -768,6 +770,9 @@ app.get('/api/marketplace/assets', async (req: Request, res: Response) => {
         const marketplaceAssets = assets.map((asset: AssetRecord) => ({
             id: asset.id,
             assetid: asset.assetid,
+            appid: asset.appid,
+            steamID: asset.steamID,
+            steamName: asset.steamName,
             title: asset.name,
             game: asset.appid === 730 ? "Counter-Strike: Global Offensive" : 
                   asset.appid === 570 ? "Dota 2" : 
@@ -777,12 +782,7 @@ app.get('/api/marketplace/assets', async (req: Request, res: Response) => {
                    asset.appid === 440 ? "tf2" : "unknown",
             price: formatSuiPrice(asset.price), // Price is already stored in SUI format, format intelligently
             image: asset.icon_url ? `https://steamcommunity-a.akamaihd.net/economy/image/${asset.icon_url}` : "/placeholder.svg",
-            genre: asset.appid === 730 || asset.appid === 440 ? "fps" : 
-                   asset.appid === 570 ? "moba" : "other",
-            rarity: "Classified", // Could be enhanced with rarity detection
-            condition: "Field-Tested", // Could be enhanced with condition detection
             isAuction: false, // All current listings are fixed price
-            likes: Math.floor(Math.random() * 1000) + 100, // Mock data for now
             timeLeft: null,
             walletAddress: asset.walletAddress,
             blobId: asset.blobId,
@@ -857,13 +857,14 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
         const {
             appid, contextid, assetid, classid, instanceid, amount, walletAddress,
             icon_url, name, price, listingType, description, auctionDuration,
-            blobId, signature, signedBytes
+            blobId, signature, signedBytes, steamID, steamName
         } = req.body;
 
         console.log('[API][Store Asset] Extracted fields:', {
             appid, contextid, assetid, classid, instanceid, amount, walletAddress,
             icon_url, name, price, listingType, description, auctionDuration,
-            blobId, signature: signature ? signature.substring(0, 20) + '...' : 'undefined'
+            blobId, signature: signature ? signature.substring(0, 20) + '...' : 'undefined',
+            steamID, steamName
         });
 
         // Validate required fields
@@ -893,6 +894,8 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
             name: name || 'Unknown Item',
             price: price ? parseFloat(price).toString() : '0',
             description: description || '',
+            steamID: steamID || null,
+            steamName: steamName || null,
             uploadedAt: new Date().toISOString()
         };
 
