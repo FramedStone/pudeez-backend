@@ -22,6 +22,7 @@ export interface AssetRecord {
     icon_url: string;
     name: string;
     price: string;
+    description?: string;
     uploadedAt: string;
 }
 
@@ -110,6 +111,7 @@ export class Database {
                 icon_url TEXT NOT NULL,
                 name TEXT NOT NULL,
                 price TEXT NOT NULL,
+                description TEXT,
                 uploadedAt TEXT NOT NULL,
                 UNIQUE(walletAddress, assetid)
             )
@@ -171,8 +173,8 @@ export class Database {
         return new Promise((resolve, reject) => {
             const insertQuery = `
                 INSERT INTO ${ASSETS_TABLE_NAME} 
-                (walletAddress, blobId, appid, assetid, classid, instanceid, contextid, amount, icon_url, name, price, uploadedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (walletAddress, blobId, appid, assetid, classid, instanceid, contextid, amount, icon_url, name, price, description, uploadedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             
             this.rawDb.run(
@@ -189,6 +191,7 @@ export class Database {
                     assetRecord.icon_url,
                     assetRecord.name,
                     assetRecord.price,
+                    assetRecord.description || null,
                     assetRecord.uploadedAt
                 ],
                 function(err: Error | null) {

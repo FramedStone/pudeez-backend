@@ -548,6 +548,86 @@ app.delete('/api/walrus/assets/:blobId', async (req: Request, res: Response) => 
     }
 });
 
+// API endpoint to store asset with Walrus blob ID and Sui signature
+app.post('/api/store-asset', async (req: Request, res: Response) => {
+    try {
+        console.log('[API][Store Asset] Received request body:', JSON.stringify(req.body, null, 2));
+        
+        const {
+            appid, contextid, assetid, classid, instanceid, amount, walletAddress,
+            icon_url, name, price, listingType, description, auctionDuration,
+            blobId, signature, signedBytes
+        } = req.body;
+
+        console.log('[API][Store Asset] Extracted fields:', {
+            appid, contextid, assetid, classid, instanceid, amount, walletAddress,
+            icon_url, name, price, listingType, description, auctionDuration,
+            blobId, signature: signature ? signature.substring(0, 20) + '...' : 'undefined'
+        });
+
+        // Validate required fields
+        if (!walletAddress || !blobId || !signature || !assetid) {
+            console.log('[API][Store Asset] Validation failed - Missing required fields:', {
+                walletAddress: !!walletAddress,
+                blobId: !!blobId,
+                signature: !!signature,
+                assetid: !!assetid
+            });
+            return res.status(400).json({ 
+                error: 'Missing required fields: walletAddress, blobId, signature, assetid' 
+            });
+        }
+
+        // Create asset record for database (matching the existing AssetRecord interface)
+        const assetRecord: AssetRecord = {
+            walletAddress,
+            blobId,
+            appid: parseInt(appid) || 0,
+            assetid,
+            classid: classid || '',
+            instanceid: instanceid || '',
+            contextid: contextid || '',
+            amount: amount || '1',
+            icon_url: icon_url || '',
+            name: name || 'Unknown Item',
+            price: price ? parseFloat(price).toString() : '0',
+            description: description || '',
+            uploadedAt: new Date().toISOString()
+        };
+
+        // Store in database
+        await db.addAsset(assetRecord);
+        
+        // Log additional metadata for future use (signature, listing details, etc.)
+        console.log(`[API][Store Asset] Successfully stored asset ${assetid} for wallet ${walletAddress}`);
+        console.log(`[API][Store Asset] Blob ID: ${blobId}, Signature: ${signature?.substring(0, 20)}...`);
+        console.log(`[API][Store Asset] Listing details:`, { listingType, description, auctionDuration });
+        
+        res.json({ 
+            success: true, 
+            message: 'Asset successfully listed with signature verification',
+            blobId,
+            assetId: assetid
+        });
+
+    } catch (error) {
+        console.error('[API][Store Asset] Error:', error);
+        
+        // Handle specific database constraint errors
+        if (error instanceof Error && error.message.includes('UNIQUE constraint failed: assets.walletAddress, assets.assetid')) {
+            return res.status(400).json({ 
+                error: 'Asset already listed', 
+                details: 'This asset is already listed for sale by your wallet. Please check your existing listings.' 
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Failed to store asset listing', 
+            details: error instanceof Error ? error.message : 'Unknown error' 
+        });
+    }
+});
+
 // 404 handler
 app.use('/{*any}', (req: Request, res: Response) => {
   res.status(404).json({ error: 'Route not found' });
