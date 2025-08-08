@@ -773,6 +773,7 @@ app.get('/api/marketplace/assets', async (req: Request, res: Response) => {
             appid: asset.appid,
             steamID: asset.steamID,
             steamName: asset.steamName,
+            steamAvatar: asset.steamAvatar,
             title: asset.name,
             game: asset.appid === 730 ? "Counter-Strike: Global Offensive" : 
                   asset.appid === 570 ? "Dota 2" : 
@@ -857,14 +858,14 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
         const {
             appid, contextid, assetid, classid, instanceid, amount, walletAddress,
             icon_url, name, price, listingType, description, auctionDuration,
-            blobId, signature, signedBytes, steamID, steamName
+            blobId, signature, signedBytes, steamID, steamName, steamAvatar
         } = req.body;
 
         console.log('[API][Store Asset] Extracted fields:', {
             appid, contextid, assetid, classid, instanceid, amount, walletAddress,
             icon_url, name, price, listingType, description, auctionDuration,
             blobId, signature: signature ? signature.substring(0, 20) + '...' : 'undefined',
-            steamID, steamName
+            steamID, steamName, steamAvatar
         });
 
         // Validate required fields
@@ -896,6 +897,7 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
             description: description || '',
             steamID: steamID || null,
             steamName: steamName || null,
+            steamAvatar: steamAvatar || null,
             uploadedAt: new Date().toISOString()
         };
 

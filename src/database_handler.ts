@@ -25,6 +25,7 @@ export interface AssetRecord {
     description?: string;
     steamID?: string;
     steamName?: string;
+    steamAvatar?: string;
     uploadedAt: string;
 }
 
@@ -116,6 +117,7 @@ export class Database {
                 description TEXT,
                 steamID TEXT,
                 steamName TEXT,
+                steamAvatar TEXT,
                 uploadedAt TEXT NOT NULL,
                 UNIQUE(walletAddress, assetid)
             )
@@ -172,6 +174,17 @@ export class Database {
                         }
                     });
                 }
+                
+                // Add steamAvatar column if it doesn't exist
+                if (!columnNames.includes('steamAvatar')) {
+                    this.rawDb.exec(`ALTER TABLE ${ASSETS_TABLE_NAME} ADD COLUMN steamAvatar TEXT`, (err: Error | null) => {
+                        if (err) {
+                            console.error('Error adding steamAvatar column:', err);
+                        } else {
+                            console.log('Added steamAvatar column to assets table');
+                        }
+                    });
+                }
             });
         });
     }
@@ -224,8 +237,8 @@ export class Database {
         return new Promise((resolve, reject) => {
             const insertQuery = `
                 INSERT INTO ${ASSETS_TABLE_NAME} 
-                (walletAddress, blobId, appid, assetid, classid, instanceid, contextid, amount, icon_url, name, price, description, steamID, steamName, uploadedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (walletAddress, blobId, appid, assetid, classid, instanceid, contextid, amount, icon_url, name, price, description, steamID, steamName, steamAvatar, uploadedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             
             this.rawDb.run(
@@ -245,6 +258,7 @@ export class Database {
                     assetRecord.description || null,
                     assetRecord.steamID || null,
                     assetRecord.steamName || null,
+                    assetRecord.steamAvatar || null,
                     assetRecord.uploadedAt
                 ],
                 function(err: Error | null) {
