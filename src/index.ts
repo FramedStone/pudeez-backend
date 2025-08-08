@@ -349,11 +349,11 @@ app.post('/api/walrus/list', async (req: Request, res: Response) => {
             });
         }
 
-        // Validate price format (should be a valid number in MIST)
+        // Validate price format (should be a valid number in SUI)
         const priceNumber = parseFloat(assetData.price);
         if (isNaN(priceNumber) || priceNumber < 0) {
             return res.status(400).json({
-                error: 'Invalid price format. Price must be a valid non-negative number in MIST'
+                error: 'Invalid price format. Price must be a valid non-negative number in SUI'
             });
         }
 
@@ -434,6 +434,102 @@ app.get('/api/walrus/retrieve/:blobId', async (req: Request, res: Response) => {
     }
 });
 
+// Walrus Upload Proxy to handle CORS issues
+app.post('/api/walrus/upload-proxy', async (req: Request, res: Response) => {
+    try {
+        const { data, epochs = 5 } = req.body;
+        
+        if (!data) {
+            return res.status(400).json({
+                error: 'Data is required'
+            });
+        }
+
+        // Convert base64 data to buffer if needed
+        let buffer: Buffer;
+        if (typeof data === 'string') {
+            // If it's base64, decode it
+            if (data.startsWith('data:')) {
+                const base64Data = data.split(',')[1];
+                buffer = Buffer.from(base64Data, 'base64');
+            } else {
+                // If it's plain string, convert to buffer
+                buffer = Buffer.from(data, 'utf-8');
+            }
+        } else if (data instanceof Buffer) {
+            buffer = data;
+        } else {
+            // If it's an object, stringify it
+            buffer = Buffer.from(JSON.stringify(data), 'utf-8');
+        }
+
+        console.log('Walrus proxy: Uploading blob of size:', buffer.length, 'bytes');
+
+        const publisherEndpoints = [
+            'https://publisher.walrus-testnet.walrus.space',
+            'https://wal-publisher-testnet.staketab.org'
+        ];
+
+        let walrusSuccess = false;
+        let lastError = null;
+        let blobId = null;
+
+        for (const publisherUrl of publisherEndpoints) {
+            try {
+                console.log(`Walrus proxy: Attempting upload to: ${publisherUrl}`);
+                
+                const response = await axios.put(
+                    `${publisherUrl}/v1/blobs?epochs=${epochs}`,
+                    buffer,
+                    {
+                        headers: {
+                            'Content-Type': 'application/octet-stream'
+                        },
+                        timeout: 30000 // 30 second timeout
+                    }
+                );
+
+                if (response.status === 200) {
+                    const walrusResponse = response.data;
+                    blobId = walrusResponse?.newlyCreated?.blobObject?.blobId || walrusResponse?.alreadyCertified?.blobId;
+                    
+                    if (blobId) {
+                        console.log(`Walrus proxy: Upload successful! Blob ID: ${blobId} via ${publisherUrl}`);
+                        walrusSuccess = true;
+                        break;
+                    }
+                }
+            } catch (error: any) {
+                const errorMessage = error.response?.data || error.message || String(error);
+                lastError = `${publisherUrl}: ${errorMessage}`;
+                console.warn(`Walrus proxy: Upload failed at ${publisherUrl}:`, errorMessage);
+            }
+        }
+
+        if (walrusSuccess && blobId) {
+            res.status(200).json({
+                success: true,
+                blobId: blobId,
+                message: 'Blob uploaded successfully to Walrus'
+            });
+        } else {
+            console.warn('Walrus proxy: All publisher endpoints failed. Last error:', lastError);
+            res.status(500).json({
+                success: false,
+                error: 'All Walrus publisher endpoints failed',
+                details: lastError
+            });
+        }
+        
+    } catch (error) {
+        console.error('Error in Walrus upload proxy:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error in upload proxy'
+        });
+    }
+});
+
 // Get all assets for a specific wallet address
 app.get('/api/walrus/assets/:walletAddress', async (req: Request, res: Response) => {
     try {
@@ -503,6 +599,81 @@ app.get('/api/walrus/assets', async (req: Request, res: Response) => {
         console.error('Error in get all assets endpoint:', error);
         res.status(500).json({
             error: 'Failed to retrieve assets'
+        });
+    }
+});
+
+// Get marketplace assets (formatted for marketplace display)
+app.get('/api/marketplace/assets', async (req: Request, res: Response) => {
+    try {
+        const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+        const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+        
+        // Validate pagination parameters
+        if (limit < 1 || limit > 100) {
+            return res.status(400).json({
+                error: 'Limit must be between 1 and 100'
+            });
+        }
+        
+        if (offset < 0) {
+            return res.status(400).json({
+                error: 'Offset must be non-negative'
+            });
+        }
+
+        const assets = await db.getAllAssets(limit, offset);
+        
+        // Helper function to format SUI prices intelligently
+        const formatSuiPrice = (price: string): string => {
+            const num = parseFloat(price);
+            if (num === 0) return "0 SUI";
+            
+            // Remove trailing zeros after decimal point
+            const formatted = num.toFixed(4).replace(/\.?0+$/, '');
+            return `${formatted} SUI`;
+        };
+
+        // Transform assets for marketplace display
+        const marketplaceAssets = assets.map((asset: AssetRecord) => ({
+            id: asset.id,
+            assetid: asset.assetid,
+            title: asset.name,
+            game: asset.appid === 730 ? "Counter-Strike: Global Offensive" : 
+                  asset.appid === 570 ? "Dota 2" : 
+                  asset.appid === 440 ? "Team Fortress 2" : "Unknown Game",
+            gameId: asset.appid === 730 ? "csgo" : 
+                   asset.appid === 570 ? "dota2" : 
+                   asset.appid === 440 ? "tf2" : "unknown",
+            price: formatSuiPrice(asset.price), // Price is already stored in SUI format, format intelligently
+            image: asset.icon_url ? `https://steamcommunity-a.akamaihd.net/economy/image/${asset.icon_url}` : "/placeholder.svg",
+            genre: asset.appid === 730 || asset.appid === 440 ? "fps" : 
+                   asset.appid === 570 ? "moba" : "other",
+            rarity: "Classified", // Could be enhanced with rarity detection
+            condition: "Field-Tested", // Could be enhanced with condition detection
+            isAuction: false, // All current listings are fixed price
+            likes: Math.floor(Math.random() * 1000) + 100, // Mock data for now
+            timeLeft: null,
+            walletAddress: asset.walletAddress,
+            blobId: asset.blobId,
+            description: asset.description,
+            uploadedAt: asset.uploadedAt
+        }));
+        
+        res.status(200).json({
+            success: true,
+            assets: marketplaceAssets,
+            count: marketplaceAssets.length,
+            pagination: {
+                limit,
+                offset,
+                hasMore: marketplaceAssets.length === limit
+            }
+        });
+    } catch (error) {
+        console.error('Error in marketplace assets endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to retrieve marketplace assets'
         });
     }
 });
