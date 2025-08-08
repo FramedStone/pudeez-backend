@@ -228,6 +228,136 @@ app.post('/api/user/get_steamid', (req: Request, res: Response) => {
     });
 })
 
+// Get Steam profile information for a wallet address using public Steam Community API
+app.post('/api/user/get_steam_profile', async (req: Request, res: Response) => {
+    try {
+        const { address } = req.body;
+        
+        if (!address) {
+            return res.status(400).json({ 
+                error: 'Wallet address is required' 
+            });
+        }
+
+        console.log('[get_steam_profile] Received address:', address);
+
+        // First get the Steam ID from our database
+        db.getSteamID(address, async (err: Error | null, steamID?: string) => {
+            if (err) {
+                console.error('[get_steam_profile] DB error:', err);
+                return res.status(500).json({ error: err.message });
+            }
+
+            if (!steamID) {
+                return res.status(404).json({ 
+                    error: 'No Steam account linked to this wallet address' 
+                });
+            }
+
+            console.log('[get_steam_profile] Found steamID:', steamID);
+
+            try {
+                // Use Steam Community public XML API (no API key required)
+                const steamProfileUrl = `https://steamcommunity.com/profiles/${steamID}/?xml=1`;
+                console.log('[get_steam_profile] Fetching from Steam Community XML API...');
+
+                const response = await axios.get(steamProfileUrl, {
+                    timeout: 10000, // 10 second timeout
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                });
+
+                // Parse XML response (Steam returns XML format)
+                const xmlData = response.data;
+                
+                // Basic XML parsing for Steam profile data
+                const steamidMatch = xmlData.match(/<steamID64>(\d+)<\/steamID64>/);
+                const nameMatch = xmlData.match(/<steamID><!\[CDATA\[(.*?)\]\]><\/steamID>/);
+                const avatarMatch = xmlData.match(/<avatarIcon><!\[CDATA\[(.*?)\]\]><\/avatarIcon>/);
+                const avatarMediumMatch = xmlData.match(/<avatarMedium><!\[CDATA\[(.*?)\]\]><\/avatarMedium>/);
+                const avatarFullMatch = xmlData.match(/<avatarFull><!\[CDATA\[(.*?)\]\]><\/avatarFull>/);
+                const profileUrlMatch = xmlData.match(/<profileURL><!\[CDATA\[(.*?)\]\]><\/profileURL>/);
+                const onlineStateMatch = xmlData.match(/<onlineState><!\[CDATA\[(.*?)\]\]><\/onlineState>/);
+                const stateMessageMatch = xmlData.match(/<stateMessage><!\[CDATA\[(.*?)\]\]><\/stateMessage>/);
+                const realNameMatch = xmlData.match(/<realname><!\[CDATA\[(.*?)\]\]><\/realname>/);
+                const visibilityMatch = xmlData.match(/<visibilityState>(\d+)<\/visibilityState>/);
+
+                // Check if profile data was found (profile might be private)
+                if (!steamidMatch || !nameMatch) {
+                    return res.status(404).json({ 
+                        error: 'Steam profile not found or is set to private' 
+                    });
+                }
+
+                // Map online state text to numeric values (similar to Steam Web API)
+                const getPersonaState = (state: string) => {
+                    switch (state?.toLowerCase()) {
+                        case 'online': return 1;
+                        case 'busy': return 2;
+                        case 'away': return 3;
+                        case 'snooze': return 4;
+                        case 'looking to trade': return 5;
+                        case 'looking to play': return 6;
+                        default: return 0; // offline
+                    }
+                };
+
+                // Transform Steam Community XML response to match ProfilePage expectations
+                const profileData = {
+                    steamid: steamidMatch[1],
+                    personaname: nameMatch[1],
+                    profileurl: profileUrlMatch ? profileUrlMatch[1] : `https://steamcommunity.com/profiles/${steamID}`,
+                    avatar: avatarMatch ? avatarMatch[1] : '',
+                    avatarmedium: avatarMediumMatch ? avatarMediumMatch[1] : '',
+                    avatarfull: avatarFullMatch ? avatarFullMatch[1] : '',
+                    personastate: onlineStateMatch ? getPersonaState(onlineStateMatch[1]) : 0,
+                    communityvisibilitystate: visibilityMatch ? parseInt(visibilityMatch[1]) : 1,
+                    statemessage: stateMessageMatch ? stateMessageMatch[1] : '',
+                    realname: realNameMatch ? realNameMatch[1] : '',
+                    lastlogoff: null // Not available in XML API
+                };
+
+                console.log('[get_steam_profile] Successfully fetched profile for:', profileData.personaname);
+
+                res.status(200).json({ 
+                    success: true,
+                    profile: profileData 
+                });
+
+            } catch (steamApiError) {
+                console.error('[get_steam_profile] Steam Community API error:', steamApiError);
+                
+                if (axios.isAxiosError(steamApiError)) {
+                    if (steamApiError.response?.status === 404) {
+                        return res.status(404).json({ 
+                            error: 'Steam profile not found' 
+                        });
+                    } else if (steamApiError.response?.status === 403) {
+                        return res.status(403).json({ 
+                            error: 'Steam profile is private or restricted' 
+                        });
+                    } else if (steamApiError.response?.status === 429) {
+                        return res.status(429).json({ 
+                            error: 'Too many requests. Please try again later.' 
+                        });
+                    }
+                }
+
+                res.status(500).json({ 
+                    error: 'Failed to fetch Steam profile data from Steam Community' 
+                });
+            }
+        });
+
+    } catch (error) {
+        console.error('[get_steam_profile] Unexpected error:', error);
+        res.status(500).json({ 
+            error: 'Internal server error while fetching Steam profile' 
+        });
+    }
+});
+
 // Get Steam inventory for a user
 app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => {
     try {
