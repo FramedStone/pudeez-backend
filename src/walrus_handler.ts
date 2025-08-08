@@ -17,6 +17,8 @@ export interface SteamAsset {
     icon_url: string; // Steam asset icon URL
     name: string; // Steam asset name
     price: string; // Price in MIST (smallest Sui denomination)
+    steamID?: string; // Steam user ID
+    steamName?: string; // Steam display name
 }
 
 // Walrus storage response interface

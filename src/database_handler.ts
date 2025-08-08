@@ -23,6 +23,8 @@ export interface AssetRecord {
     name: string;
     price: string;
     description?: string;
+    steamID?: string;
+    steamName?: string;
     uploadedAt: string;
 }
 
@@ -112,6 +114,8 @@ export class Database {
                 name TEXT NOT NULL,
                 price TEXT NOT NULL,
                 description TEXT,
+                steamID TEXT,
+                steamName TEXT,
                 uploadedAt TEXT NOT NULL,
                 UNIQUE(walletAddress, assetid)
             )
@@ -121,7 +125,54 @@ export class Database {
                 console.error('Error creating assets table:', err);
             } else {
                 console.log('Assets table initialized successfully');
+                // Run migrations after table creation
+                this.runMigrations();
             }
+        });
+    }
+
+    /**
+     * Run database migrations to add missing columns
+     */
+    private runMigrations(): void {
+        // Check if steamID column exists, if not add it
+        this.rawDb.get(`PRAGMA table_info(${ASSETS_TABLE_NAME})`, (err: Error | null, result: any) => {
+            if (err) {
+                console.error('Error checking table info:', err);
+                return;
+            }
+            
+            // Get all columns
+            this.rawDb.all(`PRAGMA table_info(${ASSETS_TABLE_NAME})`, (err: Error | null, columns: any[]) => {
+                if (err) {
+                    console.error('Error getting table columns:', err);
+                    return;
+                }
+                
+                const columnNames = columns.map(col => col.name);
+                
+                // Add steamID column if it doesn't exist
+                if (!columnNames.includes('steamID')) {
+                    this.rawDb.exec(`ALTER TABLE ${ASSETS_TABLE_NAME} ADD COLUMN steamID TEXT`, (err: Error | null) => {
+                        if (err) {
+                            console.error('Error adding steamID column:', err);
+                        } else {
+                            console.log('Added steamID column to assets table');
+                        }
+                    });
+                }
+                
+                // Add steamName column if it doesn't exist
+                if (!columnNames.includes('steamName')) {
+                    this.rawDb.exec(`ALTER TABLE ${ASSETS_TABLE_NAME} ADD COLUMN steamName TEXT`, (err: Error | null) => {
+                        if (err) {
+                            console.error('Error adding steamName column:', err);
+                        } else {
+                            console.log('Added steamName column to assets table');
+                        }
+                    });
+                }
+            });
         });
     }
 
@@ -173,8 +224,8 @@ export class Database {
         return new Promise((resolve, reject) => {
             const insertQuery = `
                 INSERT INTO ${ASSETS_TABLE_NAME} 
-                (walletAddress, blobId, appid, assetid, classid, instanceid, contextid, amount, icon_url, name, price, description, uploadedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (walletAddress, blobId, appid, assetid, classid, instanceid, contextid, amount, icon_url, name, price, description, steamID, steamName, uploadedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             
             this.rawDb.run(
@@ -192,6 +243,8 @@ export class Database {
                     assetRecord.name,
                     assetRecord.price,
                     assetRecord.description || null,
+                    assetRecord.steamID || null,
+                    assetRecord.steamName || null,
                     assetRecord.uploadedAt
                 ],
                 function(err: Error | null) {
