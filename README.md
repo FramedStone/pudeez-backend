@@ -10,6 +10,7 @@ This backend powers the Pudeez marketplace, handling user auth (zkLogin), produc
 - Sui TypeScript SDK
 - Walrus 
 - SQLite 
+- Slush wallet
 
 ## TODO
 - [X] TypeScript, ESLint, Prettier setup (with Husky for automation if needed)
