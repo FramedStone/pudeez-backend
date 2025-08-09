@@ -135,6 +135,9 @@ if (FRONTEND_URL === '*') {
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin');
   console.log(`Request received - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
   
   // Vercel handles CORS headers at the routing level via vercel.json
