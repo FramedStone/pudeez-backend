@@ -152,7 +152,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Global OPTIONS handler as safety net for all preflight requests
-app.options('*', (req: Request, res: Response) => {
+app.options('/{*splat}', (req: Request, res: Response) => {
   console.log('Global OPTIONS handler triggered for:', req.path);
   res.status(200).end();
 });
