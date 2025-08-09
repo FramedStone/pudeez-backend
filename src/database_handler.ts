@@ -41,13 +41,14 @@ export interface EscrowRecord {
     assetName: string;
     assetAmount: number;
     appId: string;
+    iconUrl?: string;
     classId?: string;
     instanceId?: string;
     tradeUrl: string;
     priceInSui: string;
     initialSellerItemCount: number;
     initialBuyerItemCount: number;
-    status: 'in-progress' | 'cancelled' | 'completed';
+    status: 'initialized' | 'deposited' | 'in-progress' | 'cancelled' | 'completed';
     transactionDigest?: string;
     blobId?: string; // For Walrus storage
     createdAt: string;
@@ -175,13 +176,14 @@ export class Database {
                 assetName TEXT NOT NULL,
                 assetAmount INTEGER NOT NULL,
                 appId TEXT NOT NULL,
+                iconUrl TEXT,
                 classId TEXT,
                 instanceId TEXT,
                 tradeUrl TEXT NOT NULL,
                 priceInSui TEXT NOT NULL,
                 initialSellerItemCount INTEGER NOT NULL,
                 initialBuyerItemCount INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'in-progress' CHECK(status IN ('in-progress', 'cancelled', 'completed')),
+                status TEXT NOT NULL DEFAULT 'initialized' CHECK(status IN ('initialized', 'deposited', 'in-progress', 'cancelled', 'completed')),
                 transactionDigest TEXT,
                 blobId TEXT,
                 createdAt TEXT NOT NULL,
@@ -249,6 +251,118 @@ export class Database {
                         }
                     });
                 }
+            });
+        });
+
+        // Check escrow table for iconUrl column
+        this.rawDb.all(`PRAGMA table_info(${ESCROW_TABLE_NAME})`, (err: Error | null, columns: any[]) => {
+            if (err) {
+                console.error('Error getting escrow table columns:', err);
+                return;
+            }
+            
+            const columnNames = columns.map(col => col.name);
+            
+            // Add iconUrl column if it doesn't exist
+            if (!columnNames.includes('iconUrl')) {
+                this.rawDb.exec(`ALTER TABLE ${ESCROW_TABLE_NAME} ADD COLUMN iconUrl TEXT`, (err: Error | null) => {
+                    if (err) {
+                        console.error('Error adding iconUrl column:', err);
+                    } else {
+                        console.log('Added iconUrl column to escrow table');
+                    }
+                });
+            }
+
+            // Fix status CHECK constraint by recreating the table if needed
+            // Check if the constraint allows 'initialized' and 'deposited' statuses
+            this.rawDb.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${ESCROW_TABLE_NAME}'`, 
+                (err: Error | null, result: any) => {
+                    if (err) {
+                        console.error('Error checking escrow table schema:', err);
+                        return;
+                    }
+
+                    const tableSQL = result?.sql || '';
+                    // Check if the constraint includes our new statuses
+                    if (tableSQL && !tableSQL.includes("'initialized'") && !tableSQL.includes("'deposited'")) {
+                        console.log('Updating escrow table status constraint...');
+                        this.migrateEscrowStatusConstraint();
+                    }
+                });
+        });
+    }
+
+    /**
+     * Migrate escrow table to fix status constraint
+     */
+    private migrateEscrowStatusConstraint(): void {
+        // SQLite doesn't support modifying CHECK constraints directly
+        // So we need to recreate the table with the correct constraint
+        const tempTableName = `${ESCROW_TABLE_NAME}_temp`;
+        
+        // Step 1: Create new table with correct constraint
+        const createTempTableSQL = `
+            CREATE TABLE ${tempTableName} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                escrowId TEXT NOT NULL UNIQUE,
+                buyerAddress TEXT NOT NULL,
+                sellerAddress TEXT NOT NULL,
+                buyerSteamId TEXT,
+                sellerSteamId TEXT,
+                assetId TEXT NOT NULL,
+                assetName TEXT NOT NULL,
+                assetAmount INTEGER NOT NULL,
+                appId TEXT NOT NULL,
+                iconUrl TEXT,
+                classId TEXT,
+                instanceId TEXT,
+                tradeUrl TEXT NOT NULL,
+                priceInSui TEXT NOT NULL,
+                initialSellerItemCount INTEGER NOT NULL,
+                initialBuyerItemCount INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'initialized' CHECK(status IN ('initialized', 'deposited', 'in-progress', 'cancelled', 'completed')),
+                transactionDigest TEXT,
+                blobId TEXT,
+                createdAt TEXT NOT NULL,
+                updatedAt TEXT NOT NULL
+            )
+        `;
+
+        this.rawDb.exec(createTempTableSQL, (err: Error | null) => {
+            if (err) {
+                console.error('Error creating temp escrow table:', err);
+                return;
+            }
+
+            // Step 2: Copy data from old table to new table
+            const copyDataSQL = `
+                INSERT INTO ${tempTableName} 
+                SELECT * FROM ${ESCROW_TABLE_NAME}
+            `;
+
+            this.rawDb.exec(copyDataSQL, (err: Error | null) => {
+                if (err) {
+                    console.error('Error copying escrow data:', err);
+                    return;
+                }
+
+                // Step 3: Drop old table
+                this.rawDb.exec(`DROP TABLE ${ESCROW_TABLE_NAME}`, (err: Error | null) => {
+                    if (err) {
+                        console.error('Error dropping old escrow table:', err);
+                        return;
+                    }
+
+                    // Step 4: Rename temp table to original name
+                    this.rawDb.exec(`ALTER TABLE ${tempTableName} RENAME TO ${ESCROW_TABLE_NAME}`, (err: Error | null) => {
+                        if (err) {
+                            console.error('Error renaming temp escrow table:', err);
+                        } else {
+                            console.log('Successfully migrated escrow table status constraint');
+                        }
+                    });
+                });
             });
         });
     }
@@ -457,10 +571,10 @@ export class Database {
             const query = `
                 INSERT INTO ${ESCROW_TABLE_NAME} (
                     escrowId, buyerAddress, sellerAddress, buyerSteamId, sellerSteamId,
-                    assetId, assetName, assetAmount, appId, classId, instanceId,
+                    assetId, assetName, assetAmount, appId, iconUrl, classId, instanceId,
                     tradeUrl, priceInSui, initialSellerItemCount, initialBuyerItemCount,
                     status, transactionDigest, blobId, createdAt, updatedAt
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             
             const params = [
@@ -473,6 +587,7 @@ export class Database {
                 escrowRecord.assetName,
                 escrowRecord.assetAmount,
                 escrowRecord.appId,
+                escrowRecord.iconUrl,
                 escrowRecord.classId,
                 escrowRecord.instanceId,
                 escrowRecord.tradeUrl,
@@ -500,7 +615,7 @@ export class Database {
     /**
      * Update escrow status
      */
-    updateEscrowStatus(escrowId: string, status: 'in-progress' | 'cancelled' | 'completed', transactionDigest?: string): Promise<boolean> {
+    updateEscrowStatus(escrowId: string, status: 'initialized' | 'deposited' | 'in-progress' | 'cancelled' | 'completed', transactionDigest?: string): Promise<boolean> {
         return new Promise((resolve, reject) => {
             const query = `
                 UPDATE ${ESCROW_TABLE_NAME} 
@@ -584,6 +699,28 @@ export class Database {
     }
 
     /**
+     * Get escrows by user address (buyer or seller)
+     */
+    getEscrowsByUser(userAddress: string): Promise<EscrowRecord[]> {
+        return new Promise((resolve, reject) => {
+            const query = `
+                SELECT * FROM ${ESCROW_TABLE_NAME} 
+                WHERE buyerAddress = ? OR sellerAddress = ? 
+                ORDER BY createdAt DESC
+            `;
+            
+            this.rawDb.all(query, [userAddress, userAddress], (err: Error | null, rows: EscrowRecord[]) => {
+                if (err) {
+                    console.error('Error fetching escrows by user:', err);
+                    reject(err);
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    /**
      * Get all escrows with optional status filter
      */
     getAllEscrows(status?: 'in-progress' | 'cancelled' | 'completed'): Promise<EscrowRecord[]> {
@@ -601,6 +738,24 @@ export class Database {
             this.rawDb.all(query, params, (err: Error | null, rows: EscrowRecord[]) => {
                 if (err) {
                     console.error('Error fetching all escrows:', err);
+                    reject(err);
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    /**
+     * Get all active escrows (not cancelled) for marketplace filtering
+     */
+    getActiveEscrows(): Promise<EscrowRecord[]> {
+        return new Promise((resolve, reject) => {
+            const query = `SELECT * FROM ${ESCROW_TABLE_NAME} WHERE status IN ('initialized', 'deposited', 'in-progress', 'completed')`;
+            
+            this.rawDb.all(query, [], (err: Error | null, rows: EscrowRecord[]) => {
+                if (err) {
+                    console.error('Error fetching active escrows:', err);
                     reject(err);
                 } else {
                     resolve(rows || []);
