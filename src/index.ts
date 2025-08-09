@@ -147,8 +147,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.method === 'OPTIONS') {
     console.log('Handling OPTIONS preflight request for origin:', origin);
     // Vercel headers will be applied automatically
-    res.status(200).end();
-    return;
+    return res.sendStatus(200);
   }
   
   next();
