@@ -87,9 +87,16 @@ if (STEAM_API_KEY) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS middleware - Vercel serverless functions require explicit handling
-// Don't use the basic cors() middleware as it can conflict with Vercel routing
+// CORS middleware - Netlify serverless functions require explicit handling
+import cors from 'cors';
 
+const corsOptions = {
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Persistent session store using SQLite
 const SQLiteStore = SQLiteStoreFactory(session);
@@ -134,25 +141,7 @@ if (FRONTEND_URL === '*') {
   console.warn('CORS is set to allow all origins. Set FRONTEND_URL in your environment for better security.');
 }
 
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const origin = req.headers.origin;
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin');
-  console.log(`Request received - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
-  
-  // Vercel handles CORS headers at the routing level via vercel.json
-  // This middleware is mainly for logging and handling OPTIONS requests
-  
-  // Handle preflight requests immediately
-  if (req.method === 'OPTIONS') {
-    console.log('Handling OPTIONS preflight request for origin:', origin);
-    // Vercel headers will be applied automatically
-    return res.sendStatus(200);
-  }
-  
-  next();
-});
+// Removed manual CORS header middleware; handled by cors() above.
 
 // Global OPTIONS handler as safety net for all preflight requests
 app.options('/{*splat}', (req: Request, res: Response) => {
