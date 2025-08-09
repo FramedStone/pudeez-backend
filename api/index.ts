@@ -11,10 +11,14 @@ app.use(express.urlencoded({ extended: true }));
 
 // Simplified CORS for testing
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  console.log(`Request received - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
+  // Allow any origin in production, restrict in development if needed
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', process.env.NODE_ENV === 'production' ? '*' : origin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400');
   if (req.method === 'OPTIONS') {
-    console.log('Handling OPTIONS preflight request for origin:', origin);
     res.status(200).end();
     return;
   }
