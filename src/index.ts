@@ -1263,38 +1263,210 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
 
 // === Escrow API Endpoints ===
 
-// Check Steam inventory for escrow validation
+// Check Steam inventory for escrow validation and cancellation
 app.post('/api/escrow/check-inventory', async (req: Request, res: Response) => {
     try {
-        const { steamId, appId, assetId } = req.body;
+        const { escrowId, steamId, appId, assetId } = req.body;
 
-        if (!steamInventoryChecker) {
-            return res.status(503).json({
-                error: 'Steam inventory checking is not available (API key not configured)'
+        // Handle both escrow-based and direct Steam ID checking
+        if (escrowId) {
+            // Escrow-based inventory checking for cancel functionality
+            const escrow = await db.getEscrowById(escrowId);
+            
+            if (!escrow) {
+                return res.status(404).json({
+                    error: 'Escrow not found'
+                });
+            }
+
+            if (!steamInventoryChecker) {
+                // If Steam API is not available, allow cancel with warning
+                console.warn('Steam inventory checking is not available (API key not configured)');
+                return res.json({
+                    success: true,
+                    canCancel: true,
+                    hasTransferOccurred: false,
+                    message: 'Steam inventory checking unavailable, cancellation allowed',
+                    currentSellerCount: 'unknown',
+                    currentBuyerCount: 'unknown',
+                    initialSellerCount: escrow.initialSellerItemCount,
+                    initialBuyerCount: escrow.initialBuyerItemCount,
+                    timestamp: new Date().toISOString()
+                });
+            }
+
+            // Get current inventory counts for both buyer and seller
+            let currentSellerCount = 0;
+            let currentBuyerCount = 0;
+
+            try {
+                if (escrow.sellerSteamId) {
+                    currentSellerCount = await steamInventoryChecker.getItemCount(
+                        escrow.sellerSteamId, 
+                        escrow.appId, 
+                        escrow.classId || '', 
+                        escrow.instanceId || ''
+                    );
+                }
+                
+                if (escrow.buyerSteamId) {
+                    currentBuyerCount = await steamInventoryChecker.getItemCount(
+                        escrow.buyerSteamId, 
+                        escrow.appId, 
+                        escrow.classId || '', 
+                        escrow.instanceId || ''
+                    );
+                }
+            } catch (inventoryError) {
+                console.warn('Error checking Steam inventories:', inventoryError);
+                // If we can't check inventories, allow cancel with warning
+                return res.json({
+                    success: true,
+                    canCancel: true,
+                    hasTransferOccurred: false,
+                    message: 'Unable to verify Steam inventories, cancellation allowed with caution',
+                    currentSellerCount: 'error',
+                    currentBuyerCount: 'error',
+                    initialSellerCount: escrow.initialSellerItemCount,
+                    initialBuyerCount: escrow.initialBuyerItemCount,
+                    timestamp: new Date().toISOString()
+                });
+            }
+
+            // Compare with initial counts to detect if transfer occurred
+            const sellerLostItem = currentSellerCount < escrow.initialSellerItemCount;
+            const buyerGainedItem = currentBuyerCount > escrow.initialBuyerItemCount;
+            const hasTransferOccurred = sellerLostItem && buyerGainedItem;
+
+            let message = '';
+            let canCancel = true;
+
+            if (hasTransferOccurred) {
+                message = 'Asset transfer has occurred - escrow should be completed, not canceled';
+                canCancel = false;
+                
+                // Update escrow status to completed
+                try {
+                    await db.updateEscrowStatus(escrowId, 'completed');
+                    console.log(`Updated escrow ${escrowId} status to completed due to detected transfer`);
+                } catch (updateError) {
+                    console.error('Failed to update escrow status:', updateError);
+                }
+            } else if (currentSellerCount === escrow.initialSellerItemCount && currentBuyerCount === escrow.initialBuyerItemCount) {
+                message = 'No transfer detected - escrow can be safely canceled';
+                canCancel = true;
+            } else {
+                message = 'Inventory counts have changed but transfer pattern is unclear - proceed with caution';
+                canCancel = true; // Allow cancel but with warning
+            }
+
+            return res.json({
+                success: true,
+                canCancel,
+                hasTransferOccurred,
+                message,
+                currentSellerCount,
+                currentBuyerCount,
+                initialSellerCount: escrow.initialSellerItemCount,
+                initialBuyerCount: escrow.initialBuyerItemCount,
+                timestamp: new Date().toISOString()
+            });
+
+        } else {
+            // Direct Steam ID checking (legacy functionality)
+            if (!steamInventoryChecker) {
+                return res.status(503).json({
+                    error: 'Steam inventory checking is not available (API key not configured)'
+                });
+            }
+
+            if (!steamId || !appId || !assetId) {
+                return res.status(400).json({
+                    error: 'steamId, appId, and assetId are required'
+                });
+            }
+
+            const hasAsset = await steamInventoryChecker.checkAssetInInventory(steamId, appId, assetId);
+            
+            res.json({
+                success: true,
+                steamId,
+                appId,
+                assetId,
+                hasAsset,
+                timestamp: new Date().toISOString()
             });
         }
-
-        if (!steamId || !appId || !assetId) {
-            return res.status(400).json({
-                error: 'steamId, appId, and assetId are required'
-            });
-        }
-
-        const hasAsset = await steamInventoryChecker.checkAssetInInventory(steamId, appId, assetId);
-        
-        res.json({
-            success: true,
-            steamId,
-            appId,
-            assetId,
-            hasAsset,
-            timestamp: new Date().toISOString()
-        });
 
     } catch (error) {
         console.error('Error checking Steam inventory:', error);
         res.status(500).json({
             error: 'Failed to check Steam inventory',
+            details: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// Cancel escrow endpoint
+app.post('/api/escrow/cancel', async (req: Request, res: Response) => {
+    try {
+        const { escrowId, buyerAddress, reason } = req.body;
+
+        if (!escrowId || !buyerAddress) {
+            return res.status(400).json({
+                error: 'escrowId and buyerAddress are required'
+            });
+        }
+
+        console.log(`Canceling escrow ${escrowId} for buyer ${buyerAddress}`);
+
+        // Get the escrow record
+        const escrow = await db.getEscrowById(escrowId);
+        
+        if (!escrow) {
+            return res.status(404).json({
+                error: 'Escrow not found'
+            });
+        }
+
+        // Verify the requester is the buyer
+        if (escrow.buyerAddress.toLowerCase() !== buyerAddress.toLowerCase()) {
+            return res.status(403).json({
+                error: 'Only the buyer can cancel this escrow'
+            });
+        }
+
+        // Check if escrow can be cancelled
+        if (escrow.status === 'completed') {
+            return res.status(400).json({
+                error: 'Cannot cancel a completed escrow'
+            });
+        }
+
+        if (escrow.status === 'cancelled') {
+            return res.status(400).json({
+                error: 'Escrow is already cancelled'
+            });
+        }
+
+        // Update escrow status to cancelled
+        await db.updateEscrowStatus(escrowId, 'cancelled');
+
+        console.log(`Escrow ${escrowId} cancelled successfully`);
+
+        res.json({
+            success: true,
+            message: 'Escrow cancelled successfully',
+            escrowId,
+            status: 'cancelled',
+            reason: reason || 'buyer_cancellation',
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error cancelling escrow:', error);
+        res.status(500).json({
+            error: 'Failed to cancel escrow',
             details: error instanceof Error ? error.message : 'Unknown error'
         });
     }
