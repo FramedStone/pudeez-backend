@@ -2,12 +2,15 @@ import 'dotenv/config';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
+
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET is not set in environment variables');
 }
 
 // Example: get steamId from command line argument
-const steamId = process.argv[2];
+const steamId = process.argv[2] || '76561198000000000';
+
 if (!steamId) {
   console.error('Usage: ts-node issue-jwt.ts <steamId>');
   process.exit(1);
@@ -17,7 +20,7 @@ if (!steamId) {
 const payload = {
   steamId,
   iss: 'https://steamcommunity.com/openid', // steam openid issuer
-  aud: 'http://localhost:3000', // TODO: change to actual deployed backend
+  aud: BACKEND_URL, // Use environment variable for backend URL
   sub: steamId,
 };
 

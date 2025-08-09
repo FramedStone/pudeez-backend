@@ -18,6 +18,7 @@ import { Database, User, AssetRecord, EscrowRecord, SteamInventoryResponse } fro
 import { SteamAsset, storeAssetOnWalrus, retrieveAssetFromWalrus } from './walrus_handler';
 import { escrowEventListener, createSteamInventoryChecker, EscrowStatusUpdate } from './escrow_handler';
 import { randomUUID } from 'crypto';
+import steamAppsData from './test/steam-web-api/data/steam_apps.json';
 
 // Temporary in-memory token store for walletAddress
 const steamLoginTokenMap = new Map<string, string>();
@@ -38,8 +39,11 @@ const app = express();
 const PORT = process.env.PORT || 3111;
 const DB_NAME = "data.sqlite3";
 
-// Steam API key validation
+// Environment variables
 const STEAM_API_KEY = process.env.STEAM_API_KEY;
+const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+
+// Steam API key validation
 if (!STEAM_API_KEY) {
   console.warn('STEAM_API_KEY is not set in environment variables. Steam authentication will not work.');
 }
@@ -66,8 +70,8 @@ passport.deserializeUser((obj: unknown, done) => done(null, obj as Express.User)
 if (STEAM_API_KEY) {
   passport.use(new SteamStrategy(
     {
-      returnURL: `http://localhost:${PORT}/auth/steam/return`,
-      realm: `http://localhost:${PORT}/`,
+      returnURL: `${BACKEND_URL}/auth/steam/return`,
+      realm: `${BACKEND_URL}/`,
       apiKey: STEAM_API_KEY,
     },
     function (identifier, profile, done) {
@@ -171,8 +175,8 @@ app.get('/auth/steam/login', (req: Request, res: Response, next: NextFunction) =
 app.get('/auth/steam', (req, res, next) => {
     const token = req.query.token as string | undefined;
     const returnURL = token
-        ? `http://localhost:${PORT}/auth/steam/return/${encodeURIComponent(token)}`
-        : `http://localhost:${PORT}/auth/steam/return`;
+        ? `${BACKEND_URL}/auth/steam/return/${encodeURIComponent(token)}`
+        : `${BACKEND_URL}/auth/steam/return`;
     console.log('[DEBUG] passport-steam returnURL:', returnURL);
     passport.authenticate('steam', { returnURL } as any)(req, res, next);
 });
@@ -775,15 +779,62 @@ app.get('/api/marketplace/assets', async (req: Request, res: Response) => {
             });
         }
 
-        const assets = await db.getAllAssets(limit, offset);
+        // Get all assets first, then filter based on escrow status
+        const allAssets = await db.getAllAssets(limit * 2, offset); // Fetch more to account for filtering
         
-        // Helper function to format SUI prices intelligently
+        // Get active escrows that should hide/remove assets from marketplace
+        const activeEscrows = await db.getActiveEscrows();
+        
+        // Create a map of asset IDs that should be hidden (initialized/deposited/in-progress) or removed (completed)
+        const hiddenAssetIds = new Set<string>();
+        const removedAssetIds = new Set<string>();
+        
+        activeEscrows.forEach((escrow: EscrowRecord) => {
+            if (escrow.status === 'completed') {
+                removedAssetIds.add(escrow.assetId);
+            } else if (['initialized', 'deposited', 'in-progress'].includes(escrow.status)) {
+                hiddenAssetIds.add(escrow.assetId);
+            }
+            // 'cancelled' status means the asset should be visible again (not hidden or removed)
+        });
+        
+        // Filter assets to exclude hidden and removed ones
+        const visibleAssets = allAssets.filter((asset: AssetRecord) => 
+            !hiddenAssetIds.has(asset.assetid) && !removedAssetIds.has(asset.assetid)
+        );
+        
+        // Take only the requested limit after filtering
+        const assets = visibleAssets.slice(0, limit);
+        
+        // Helper function to format SUI prices intelligently  
         const formatSuiPrice = (price: string): string => {
-            const num = parseFloat(price);
-            if (num === 0) return "0 SUI";
+            // Handle null, undefined, or empty string
+            if (!price || price === '' || price === '0' || price === 'null' || price === 'undefined') {
+                return "0 SUI";
+            }
             
-            // Remove trailing zeros after decimal point
-            const formatted = num.toFixed(4).replace(/\.?0+$/, '');
+            const num = parseFloat(price);
+            
+            if (isNaN(num) || num === 0) {
+                return "0 SUI";
+            }
+            
+            // Smart decimal formatting based on amount size
+            let formatted: string;
+            if (num < 0.001) {
+                // For very small amounts, show up to 8 decimals
+                formatted = num.toFixed(8).replace(/\.?0+$/, '');
+            } else if (num < 0.01) {
+                // For small amounts, show up to 6 decimals
+                formatted = num.toFixed(6).replace(/\.?0+$/, '');
+            } else if (num < 1) {
+                // For amounts less than 1, show up to 4 decimals
+                formatted = num.toFixed(4).replace(/\.?0+$/, '');
+            } else {
+                // For larger amounts, show up to 3 decimals
+                formatted = num.toFixed(3).replace(/\.?0+$/, '');
+            }
+            
             return `${formatted} SUI`;
         };
 
@@ -883,6 +934,243 @@ app.delete('/api/walrus/assets/:blobId', async (req: Request, res: Response) => 
         console.error('Error in delete asset endpoint:', error);
         res.status(500).json({
             error: 'Failed to delete asset record'
+        });
+    }
+});
+
+// Check asset availability in seller's Steam inventory
+app.get('/api/assets/:assetId/availability', async (req: Request, res: Response) => {
+    try {
+        const { assetId } = req.params;
+        
+        if (!assetId) {
+            return res.status(400).json({
+                error: 'Asset ID is required'
+            });
+        }
+
+        // Get asset from database to get seller information
+        const assets = await db.getAllAssets(1000, 0); // Get a reasonable number of assets
+        const asset = assets.find((a: AssetRecord) => a.assetid === assetId);
+        
+        if (!asset) {
+            return res.status(404).json({
+                error: 'Asset not found in database'
+            });
+        }
+
+        // Check if Steam API is configured
+        if (!steamInventoryChecker) {
+            return res.status(503).json({
+                error: 'Steam inventory checking is not available (Steam API key not configured)'
+            });
+        }
+
+        // Get seller's Steam ID - this should be in the asset record
+        const sellerSteamId = asset.steamID;
+        if (!sellerSteamId) {
+            return res.status(400).json({
+                error: 'Seller Steam ID not found for this asset'
+            });
+        }
+
+        // Check if seller still has the asset
+        try {
+            const hasAsset = await steamInventoryChecker.checkAssetInInventory(
+                sellerSteamId,
+                asset.appid.toString(),
+                asset.assetid
+            );
+
+            // Get item count for this asset type
+            const itemCount = await steamInventoryChecker.getItemCount(
+                sellerSteamId,
+                asset.appid.toString(),
+                asset.classid,
+                asset.instanceid
+            );
+
+            res.status(200).json({
+                available: hasAsset && itemCount > 0,
+                hasAsset,
+                itemCount,
+                assetId: asset.assetid,
+                sellerSteamId,
+                appId: asset.appid,
+                message: hasAsset && itemCount > 0 ? 'Asset is available' : 'Asset is no longer available'
+            });
+
+        } catch (steamError) {
+            console.error('Steam API error:', steamError);
+            res.status(503).json({
+                error: 'Failed to check Steam inventory',
+                details: steamError instanceof Error ? steamError.message : 'Unknown Steam API error'
+            });
+        }
+
+    } catch (error) {
+        console.error('Error in asset availability endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to check asset availability'
+        });
+    }
+});
+
+// Remove unavailable asset from marketplace and database
+app.delete('/api/assets/:assetId/remove-unavailable', async (req: Request, res: Response) => {
+    try {
+        const { assetId } = req.params;
+        const { reason } = req.body;
+        
+        if (!assetId) {
+            return res.status(400).json({
+                error: 'Asset ID is required'
+            });
+        }
+
+        // Get asset from database first to get blobId and walletAddress
+        const assets = await db.getAllAssets(1000, 0);
+        const asset = assets.find((a: AssetRecord) => a.assetid === assetId);
+        
+        if (!asset) {
+            return res.status(404).json({
+                error: 'Asset not found in database'
+            });
+        }
+
+        // Delete from database
+        const deleted = await db.deleteAsset(asset.blobId, asset.walletAddress);
+        
+        if (deleted) {
+            console.log(`[Asset Removal] Removed unavailable asset ${assetId} - Reason: ${reason || 'Asset no longer available'}`);
+            
+            res.status(200).json({
+                success: true,
+                message: 'Unavailable asset removed from marketplace',
+                assetId,
+                reason: reason || 'Asset no longer available'
+            });
+        } else {
+            res.status(500).json({
+                error: 'Failed to remove asset from database'
+            });
+        }
+
+    } catch (error) {
+        console.error('Error in remove unavailable asset endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to remove unavailable asset'
+        });
+    }
+});
+
+// Check inventory transfer verification for escrow claim
+app.get('/api/escrow/:escrowId/verify-transfer', async (req: Request, res: Response) => {
+    try {
+        const { escrowId } = req.params;
+        
+        if (!escrowId) {
+            return res.status(400).json({
+                error: 'Escrow ID is required'
+            });
+        }
+
+        // Check if Steam API is configured
+        if (!steamInventoryChecker) {
+            return res.status(503).json({
+                error: 'Steam inventory checking is not available (Steam API key not configured)'
+            });
+        }
+
+        // Get escrow record from database
+        const escrow = await db.getEscrowById(escrowId);
+        
+        if (!escrow) {
+            return res.status(404).json({
+                error: 'Escrow transaction not found'
+            });
+        }
+
+        // Only allow verification for 'in-progress' escrows
+        if (escrow.status !== 'in-progress') {
+            return res.status(400).json({
+                error: `Cannot verify transfer for escrow with status: ${escrow.status}`,
+                currentStatus: escrow.status
+            });
+        }
+
+        try {
+            // Get current inventory counts for both buyer and seller
+            const sellerCurrentCount = await steamInventoryChecker.getItemCount(
+                escrow.sellerSteamId || '',
+                escrow.appId,
+                escrow.classId || '',
+                escrow.instanceId || ''
+            );
+
+            const buyerCurrentCount = await steamInventoryChecker.getItemCount(
+                escrow.buyerSteamId || '',
+                escrow.appId,
+                escrow.classId || '',
+                escrow.instanceId || ''
+            );
+
+            // Check if transfer occurred by comparing initial vs current counts
+            const sellerCountDecrease = escrow.initialSellerItemCount - sellerCurrentCount;
+            const buyerCountIncrease = buyerCurrentCount - escrow.initialBuyerItemCount;
+
+            // Transfer is verified if:
+            // 1. Seller's count decreased by at least 1
+            // 2. Buyer's count increased by at least 1
+            // 3. The decrease and increase match (or buyer got at least what seller lost)
+            const isTransferred = sellerCountDecrease >= 1 && 
+                                buyerCountIncrease >= 1 && 
+                                buyerCountIncrease >= sellerCountDecrease;
+
+            const verification = {
+                isTransferred,
+                escrowId: escrow.escrowId,
+                assetId: escrow.assetId,
+                assetName: escrow.assetName,
+                sellerSteamId: escrow.sellerSteamId,
+                buyerSteamId: escrow.buyerSteamId,
+                initialCounts: {
+                    seller: escrow.initialSellerItemCount,
+                    buyer: escrow.initialBuyerItemCount
+                },
+                currentCounts: {
+                    seller: sellerCurrentCount,
+                    buyer: buyerCurrentCount
+                },
+                changes: {
+                    sellerDecrease: sellerCountDecrease,
+                    buyerIncrease: buyerCountIncrease
+                },
+                verificationTime: new Date().toISOString(),
+                message: isTransferred 
+                    ? 'Asset transfer verified - seller can claim payment'
+                    : 'Asset transfer not detected - claim not allowed'
+            };
+
+            console.log(`[Transfer Verification] Escrow ${escrowId}:`, verification);
+
+            res.status(200).json({
+                success: true,
+                verification
+            });
+
+        } catch (steamError) {
+            console.error('Steam API error during transfer verification:', steamError);
+            res.status(503).json({
+                error: 'Failed to verify inventory transfer',
+                details: steamError instanceof Error ? steamError.message : 'Unknown Steam API error'
+            });
+        }
+
+    } catch (error) {
+        console.error('Error in transfer verification endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to verify inventory transfer'
         });
     }
 });
@@ -1112,6 +1400,184 @@ app.get('/api/escrow/events', (req: Request, res: Response) => {
     });
 });
 
+// Get all escrows for a user
+app.get('/api/escrow/getAllEscrows', async (req: Request, res: Response) => {
+    try {
+        const { address } = req.query;
+
+        console.log('getAllEscrows called with address:', address);
+
+        if (!address || typeof address !== 'string') {
+            return res.status(400).json({
+                error: 'Wallet address is required as query parameter'
+            });
+        }
+
+        // Basic Sui address validation
+        const suiAddressRegex = /^0x[a-fA-F0-9]{64}$/;
+        if (!suiAddressRegex.test(address)) {
+            return res.status(400).json({
+                error: 'Invalid Sui wallet address format'
+            });
+        }
+
+        // Get all escrows where user is either buyer or seller
+        const escrows = await db.getEscrowsByUser(address);
+        console.log('Found escrows in database:', escrows.length);
+        
+        // Transform escrows to match frontend interface
+        const transformedEscrows = escrows.map((escrow: EscrowRecord) => ({
+            transactionId: escrow.escrowId,
+            buyer: escrow.buyerAddress,
+            seller: escrow.sellerAddress,
+            item: {
+                name: escrow.assetName,
+                image: "/placeholder.svg", // You might want to retrieve this from assets table or store it
+                game: getGameNameByAppId(escrow.appId),
+                assetId: escrow.assetId
+            },
+            amount: `${parseFloat(escrow.priceInSui)} SUI`,
+            status: escrow.status,
+            createdAt: escrow.createdAt,
+            updatedAt: escrow.updatedAt,
+            steamTradeUrl: escrow.tradeUrl,
+            description: `Trading ${escrow.assetName}`,
+            role: escrow.buyerAddress.toLowerCase() === address.toLowerCase() ? 'buyer' : 'seller'
+        }));
+
+        res.json({
+            success: true,
+            escrows: transformedEscrows,
+            count: transformedEscrows.length
+        });
+
+    } catch (error) {
+        console.error('Error fetching user escrows:', error);
+        res.status(500).json({
+            error: 'Failed to fetch escrow transactions',
+            details: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// Get individual escrow transaction by ID
+app.get('/api/escrow/transaction/:transactionId', async (req: Request, res: Response) => {
+    try {
+        const { transactionId } = req.params;
+        
+        if (!transactionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Transaction ID is required'
+            });
+        }
+
+        console.log('Fetching escrow transaction:', transactionId);
+        
+        const escrow = await db.getEscrowById(transactionId);
+        
+        if (!escrow) {
+            return res.status(404).json({
+                success: false,
+                error: 'Transaction not found'
+            });
+        }
+
+        // Helper function to format SUI prices intelligently  
+        const formatSuiPrice = (price: string): string => {
+            // Handle null, undefined, or empty string
+            if (!price || price === '' || price === '0' || price === 'null' || price === 'undefined') {
+                return "0 SUI";
+            }
+            
+            const num = parseFloat(price);
+            
+            if (isNaN(num) || num === 0) {
+                return "0 SUI";
+            }
+            
+            // Smart decimal formatting based on amount size
+            let formatted: string;
+            if (num < 0.001) {
+                // For very small amounts, show up to 8 decimals
+                formatted = num.toFixed(8).replace(/\.?0+$/, '');
+            } else if (num < 0.01) {
+                // For small amounts, show up to 6 decimals
+                formatted = num.toFixed(6).replace(/\.?0+$/, '');
+            } else if (num < 1) {
+                // For amounts less than 1, show up to 4 decimals
+                formatted = num.toFixed(4).replace(/\.?0+$/, '');
+            } else {
+                // For larger amounts, show up to 3 decimals
+                formatted = num.toFixed(3).replace(/\.?0+$/, '');
+            }
+            
+            return `${formatted} SUI`;
+        };
+
+        // Transform escrow for frontend
+        const transformedEscrow = {
+            transactionId: escrow.escrowId,
+            buyer: escrow.buyerAddress,
+            seller: escrow.sellerAddress,
+            item: {
+                name: escrow.assetName,
+                image: escrow.iconUrl ? `https://steamcommunity-a.akamaihd.net/economy/image/${escrow.iconUrl}` : '/placeholder.svg',
+                game: getGameNameByAppId(escrow.appId),
+                assetId: escrow.assetId
+            },
+            amount: formatSuiPrice(escrow.priceInSui),
+            status: escrow.status,
+            createdAt: escrow.createdAt,
+            updatedAt: escrow.updatedAt,
+            steamTradeUrl: escrow.tradeUrl,
+            description: `Trading ${escrow.assetName}`,
+            role: 'buyer' // We'll determine this on the frontend based on current user
+        };
+
+        console.log('Transformed escrow:', transformedEscrow);
+
+        res.status(200).json({
+            success: true,
+            escrow: transformedEscrow
+        });
+    } catch (error) {
+        console.error('Error fetching escrow transaction:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch escrow transaction'
+        });
+    }
+});
+
+// Helper function to get game name by app ID
+interface SteamApp {
+    appid: number;
+    name: string;
+}
+
+const steamApps: SteamApp[] = steamAppsData as SteamApp[];
+
+function getGameNameByAppId(appId: string): string {
+    // First try to find in the comprehensive steam apps data
+    const game = steamApps.find(app => app.appid.toString() === appId);
+    if (game) {
+        return game.name;
+    }
+    
+    // Fallback to hardcoded map for common games
+    const gameMap: Record<string, string> = {
+        '730': 'Counter-Strike 2',
+        '570': 'Dota 2',
+        '440': 'Team Fortress 2',
+        '252490': 'Rust',
+        '304930': 'Unturned',
+        '381210': 'Dead by Daylight'
+    };
+    
+    return gameMap[appId] || 'Unknown Game';
+}
+
 // 404 handler
 app.use('/{*any}', (req: Request, res: Response) => {
   res.status(404).json({ error: 'Route not found' });
@@ -1129,7 +1595,7 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 // Start server
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
-    console.log(`Visit http://localhost:${PORT} to get started`);
+    console.log(`Visit ${BACKEND_URL} to get started`);
 });
 
 export default app;

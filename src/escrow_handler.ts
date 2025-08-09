@@ -1,5 +1,6 @@
 import { SuiClient } from "@mysten/sui/client";
 import { SuiEvent } from "@mysten/sui/client";
+import { Database } from "./database_handler";
 
 // Escrow package configuration
 export const ESCROW_PACKAGE_ID = process.env.ESCROW_PACKAGE_ID || "0x48d4ccd81159212812ac85b3dbf5359a3170c0254888d4a65e07f0e5af4cb667";
@@ -8,8 +9,9 @@ const SUI_TESTNET_URL = "https://fullnode.testnet.sui.io";
 // Log the package ID being used
 console.log(`Using ESCROW_PACKAGE_ID: ${ESCROW_PACKAGE_ID}`);
 
-// Initialize Sui client
+// Initialize Sui client and database
 const suiClient = new SuiClient({ url: SUI_TESTNET_URL });
+const database = new Database("data.sqlite3");
 
 // Interface for escrow events
 export interface EscrowInitializedEvent {
@@ -17,6 +19,10 @@ export interface EscrowInitializedEvent {
   buyer: string;
   seller: string;
   asset_id: string;
+  asset_name: string;
+  app_id: string;
+  icon_url: string;
+  trade_url: string;
   price: string;
 }
 
@@ -121,19 +127,64 @@ export class EscrowEventListener {
   }
 
   // Handle EscrowInitialized events
-  private handleEscrowInitialized(event: SuiEvent) {
+  private async handleEscrowInitialized(event: SuiEvent) {
     try {
       const parsedData = event.parsedJson as EscrowInitializedEvent;
+      
+      // Helper function to convert vector<u8> to string
+      const vectorToString = (vector: any): string => {
+        if (Array.isArray(vector)) {
+          return String.fromCharCode(...(vector as number[]));
+        }
+        return vector as string;
+      };
+      
+      const assetIdString = vectorToString(parsedData.asset_id);
+      const assetNameString = vectorToString(parsedData.asset_name);
+      const appIdString = vectorToString(parsedData.app_id);
+      const iconUrlString = vectorToString(parsedData.icon_url);
+      const tradeUrlString = vectorToString(parsedData.trade_url);
       
       const statusUpdate: EscrowStatusUpdate = {
         escrow_id: parsedData.escrow_id,
         buyer: parsedData.buyer,
         seller: parsedData.seller,
-        asset_id: parsedData.asset_id,
+        asset_id: assetIdString,
         price: parsedData.price,
         status: 'initialized',
         transaction_digest: event.id.txDigest,
       };
+
+      // Store in database (check if it already exists first)
+      const existingEscrow = await database.getEscrowById(parsedData.escrow_id);
+      if (!existingEscrow) {
+        try {
+          // Create escrow record with actual data from event
+          const escrowRecord = {
+            escrowId: parsedData.escrow_id,
+            buyerAddress: parsedData.buyer,
+            sellerAddress: parsedData.seller,
+            assetId: assetIdString,
+            assetName: assetNameString || 'Steam Asset',
+            assetAmount: 1,
+            appId: appIdString || '730', // Use actual app ID or fallback
+            iconUrl: iconUrlString || '', // Use actual icon URL
+            tradeUrl: tradeUrlString || '', // Use actual trade URL
+            priceInSui: (parseInt(parsedData.price) / 1000000000).toString(), // Convert from MIST to SUI
+            initialSellerItemCount: 0,
+            initialBuyerItemCount: 0,
+            status: 'initialized' as const,
+            transactionDigest: event.id.txDigest,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          
+          await database.addEscrow(escrowRecord);
+          console.log('Escrow stored in database:', parsedData.escrow_id);
+        } catch (dbError) {
+          console.error('Error storing escrow in database:', dbError);
+        }
+      }
 
       this.notifyCallbacks(statusUpdate);
       console.log("Escrow initialized:", statusUpdate);
@@ -143,19 +194,32 @@ export class EscrowEventListener {
   }
 
   // Handle PaymentDeposited events
-  private handlePaymentDeposited(event: SuiEvent) {
+  private async handlePaymentDeposited(event: SuiEvent) {
     try {
       const parsedData = event.parsedJson as PaymentDepositedEvent;
+      
+      // Get existing escrow data from database to fill in missing fields
+      const existingEscrow = await database.getEscrowById(parsedData.escrow_id);
       
       const statusUpdate: EscrowStatusUpdate = {
         escrow_id: parsedData.escrow_id,
         buyer: parsedData.buyer,
-        seller: '', // Will be filled from database
-        asset_id: '', // Will be filled from database
+        seller: existingEscrow?.sellerAddress || '', // Get from database
+        asset_id: existingEscrow?.assetId || '', // Get from database
         price: parsedData.amount,
         status: 'deposited',
         transaction_digest: event.id.txDigest,
       };
+
+      // Update escrow status in database if it exists
+      if (existingEscrow) {
+        try {
+          await database.updateEscrowStatus(parsedData.escrow_id, 'deposited', event.id.txDigest);
+          console.log('Updated escrow status to deposited in database for:', parsedData.escrow_id);
+        } catch (dbError) {
+          console.error('Error updating escrow status in database:', dbError);
+        }
+      }
 
       this.notifyCallbacks(statusUpdate);
       console.log("Payment deposited:", statusUpdate);
@@ -165,20 +229,33 @@ export class EscrowEventListener {
   }
 
   // Handle PaymentClaimed events
-  private handlePaymentClaimed(event: SuiEvent) {
+  private async handlePaymentClaimed(event: SuiEvent) {
     try {
       const parsedData = event.parsedJson as any;
       
+      // Get existing escrow data from database to fill in missing fields
+      const existingEscrow = await database.getEscrowById(parsedData.escrow_id);
+      
       const statusUpdate: EscrowStatusUpdate = {
         escrow_id: parsedData.escrow_id,
-        buyer: '', // Will be filled from database
+        buyer: existingEscrow?.buyerAddress || '', // Get from database
         seller: parsedData.seller,
-        asset_id: '', // Will be filled from database
+        asset_id: existingEscrow?.assetId || '', // Get from database
         price: parsedData.amount,
         status: 'completed',
         steam_trade_completed: true,
         transaction_digest: event.id.txDigest,
       };
+
+      // Update escrow status in database if it exists
+      if (existingEscrow) {
+        try {
+          await database.updateEscrowStatus(parsedData.escrow_id, 'completed', event.id.txDigest);
+          console.log('Updated escrow status to completed in database for:', parsedData.escrow_id);
+        } catch (dbError) {
+          console.error('Error updating escrow status in database:', dbError);
+        }
+      }
 
       this.notifyCallbacks(statusUpdate);
       console.log("Payment claimed (trade completed):", statusUpdate);
@@ -188,20 +265,33 @@ export class EscrowEventListener {
   }
 
   // Handle EscrowCancelled events
-  private handleEscrowCancelled(event: SuiEvent) {
+  private async handleEscrowCancelled(event: SuiEvent) {
     try {
       const parsedData = event.parsedJson as any;
+      
+      // Get existing escrow data from database to fill in missing fields
+      const existingEscrow = await database.getEscrowById(parsedData.escrow_id);
       
       const statusUpdate: EscrowStatusUpdate = {
         escrow_id: parsedData.escrow_id,
         buyer: parsedData.buyer,
-        seller: '', // Will be filled from database
-        asset_id: '', // Will be filled from database
+        seller: existingEscrow?.sellerAddress || '', // Get from database
+        asset_id: existingEscrow?.assetId || '', // Get from database
         price: parsedData.refund_amount,
         status: 'cancelled',
         steam_trade_completed: false,
         transaction_digest: event.id.txDigest,
       };
+
+      // Update escrow status in database if it exists
+      if (existingEscrow) {
+        try {
+          await database.updateEscrowStatus(parsedData.escrow_id, 'cancelled', event.id.txDigest);
+          console.log('Updated escrow status to cancelled in database for:', parsedData.escrow_id);
+        } catch (dbError) {
+          console.error('Error updating escrow status in database:', dbError);
+        }
+      }
 
       this.notifyCallbacks(statusUpdate);
       console.log("Escrow cancelled:", statusUpdate);
