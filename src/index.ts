@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import cors from 'cors';
 import session from 'express-session';
 import SQLiteStoreFactory from 'connect-sqlite3';
 
@@ -84,6 +85,8 @@ if (STEAM_API_KEY) {
 // -- Middlewares --
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cors());
+
 
 // Persistent session store using SQLite
 const SQLiteStore = SQLiteStoreFactory(session);
