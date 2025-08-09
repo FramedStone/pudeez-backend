@@ -85,7 +85,9 @@ if (STEAM_API_KEY) {
 // -- Middlewares --
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
+
+// CORS middleware - Vercel serverless functions require explicit handling
+// Don't use the basic cors() middleware as it can conflict with Vercel routing
 
 
 // Persistent session store using SQLite
@@ -135,6 +137,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
   console.log(`CORS check - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
   
+  // Always set CORS headers for Vercel serverless functions
+  // This ensures they're set even if Express cors middleware fails
+  
   // Check if origin is allowed
   let isAllowed = false;
   
@@ -151,26 +156,32 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     console.log('Allowing Vercel deployment origin:', origin);
   }
   
-  if (isAllowed) {
-    res.header('Access-Control-Allow-Origin', origin || '*');
-  } else {
-    console.warn(`Origin ${origin} not in allowed origins list`);
-    // For debugging in production, temporarily allow but log the issue
-    res.header('Access-Control-Allow-Origin', origin || '*');
-  }
-  
+  // For Vercel serverless functions, always set the origin to avoid issues
+  res.header('Access-Control-Allow-Origin', origin || '*');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
   res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
   
-  // Handle preflight requests
+  // Log for debugging
+  if (!isAllowed && origin) {
+    console.warn(`Origin ${origin} not in allowed origins list but allowing for Vercel compatibility`);
+  }
+  
+  // Handle preflight requests immediately
   if (req.method === 'OPTIONS') {
     console.log('Handling OPTIONS preflight request for origin:', origin);
-    return res.status(200).end();
+    res.status(200).end();
+    return;
   }
   
   next();
+});
+
+// Global OPTIONS handler as safety net for all preflight requests
+app.options('*', (req: Request, res: Response) => {
+  console.log('Global OPTIONS handler triggered for:', req.path);
+  res.status(200).end();
 });
 
 // Error handling middleware
