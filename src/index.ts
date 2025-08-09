@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import session from 'express-session';
 import SQLiteStoreFactory from 'connect-sqlite3';
+import serverless from "serverless-http";
 
 // Extend express-session types to include walletAddress
 import 'express-session';
@@ -1651,4 +1652,4 @@ if (process.env.NODE_ENV !== 'production') {
     });
 }
 
-export default app;
+export default serverless(app);
