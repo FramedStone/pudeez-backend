@@ -87,14 +87,20 @@ app.use(express.urlencoded({ extended: true }));
 
 // Persistent session store using SQLite
 const SQLiteStore = SQLiteStoreFactory(session);
+
+// Determine if we're in production
+const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+
 app.use(session({ 
   store: new SQLiteStore({ db: 'sessions.sqlite3', dir: './' }) as any,
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production', 
   resave: false, 
   saveUninitialized: true,
   cookie: {
-    secure: false, // Set to true if using HTTPS
-    sameSite: 'lax', // Use 'none' and secure: true if using HTTPS and cross-site
+    secure: isProduction, // Use secure cookies in production (HTTPS)
+    sameSite: isProduction ? 'none' : 'lax', // Allow cross-site cookies in production
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    httpOnly: true, // Prevent XSS attacks
   }
 }));
 
@@ -102,7 +108,7 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// CORS middleware
+// CORS middleware - Enhanced for Vercel deployment
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const PRODUCTION_FRONTEND_URL = process.env.PRODUCTION_FRONTEND_URL || 'https://pudeez-frontend-jjif.vercel.app';
 
@@ -110,9 +116,13 @@ const PRODUCTION_FRONTEND_URL = process.env.PRODUCTION_FRONTEND_URL || 'https://
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
+  'http://localhost:5174',
+  'https://pudeez-frontend-jjif.vercel.app',
   FRONTEND_URL,
   PRODUCTION_FRONTEND_URL
 ].filter(Boolean); // Remove any undefined values
+
+console.log('CORS configured for origins:', allowedOrigins);
 
 if (FRONTEND_URL === '*') {
   console.warn('CORS is set to allow all origins. Set FRONTEND_URL in your environment for better security.');
@@ -120,23 +130,44 @@ if (FRONTEND_URL === '*') {
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
+  console.log(`CORS check - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
   
-  // Allow requests with no origin (like mobile apps or curl requests)
+  // Check if origin is allowed
+  let isAllowed = false;
+  
   if (!origin) {
-    res.header('Access-Control-Allow-Origin', '*');
-  } else if (FRONTEND_URL === '*' || allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
+    // Allow requests with no origin (like mobile apps, Postman, etc.)
+    isAllowed = true;
+  } else if (FRONTEND_URL === '*') {
+    isAllowed = true;
+  } else if (allowedOrigins.includes(origin)) {
+    isAllowed = true;
+  } else if (origin.includes('.vercel.app')) {
+    // Allow all Vercel preview deployments
+    isAllowed = true;
+    console.log('Allowing Vercel deployment origin:', origin);
+  }
+  
+  if (isAllowed) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+  } else {
+    console.warn(`Origin ${origin} not in allowed origins list`);
+    // For debugging in production, temporarily allow but log the issue
+    res.header('Access-Control-Allow-Origin', origin || '*');
   }
   
   res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
   
+  // Handle preflight requests
   if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
+    console.log('Handling OPTIONS preflight request for origin:', origin);
+    return res.status(200).end();
   }
+  
+  next();
 });
 
 // Error handling middleware
@@ -711,8 +742,10 @@ app.post('/api/walrus/upload-proxy', async (req: Request, res: Response) => {
 app.get('/api/walrus/assets/:walletAddress', async (req: Request, res: Response) => {
     try {
         const { walletAddress } = req.params;
+        console.log(`GET /api/walrus/assets/${walletAddress} - Request received`);
         
         if (!walletAddress) {
+            console.log('No wallet address provided');
             return res.status(400).json({
                 error: 'Wallet address is required'
             });
@@ -721,12 +754,15 @@ app.get('/api/walrus/assets/:walletAddress', async (req: Request, res: Response)
         // Basic Sui address validation
         const suiAddressRegex = /^0x[a-fA-F0-9]{64}$/;
         if (!suiAddressRegex.test(walletAddress)) {
+            console.log(`Invalid wallet address format: ${walletAddress}`);
             return res.status(400).json({
                 error: 'Invalid Sui wallet address format'
             });
         }
 
+        console.log(`Fetching assets for wallet: ${walletAddress}`);
         const assets = await db.getAssetsByWallet(walletAddress);
+        console.log(`Found ${assets.length} assets for wallet ${walletAddress}`);
         
         res.status(200).json({
             success: true,
@@ -1770,9 +1806,15 @@ function getGameNameByAppId(appId: string): string {
     return gameMap[appId] || 'Unknown Game';
 }
 
-// 404 handler
-app.use('/{*any}', (req: Request, res: Response) => {
-  res.status(404).json({ error: 'Route not found' });
+// 404 handler with debugging
+app.use('*', (req: Request, res: Response) => {
+  console.log(`404 - Route not found: ${req.method} ${req.originalUrl}`);
+  console.log(`Headers:`, req.headers);
+  res.status(404).json({ 
+    error: 'Route not found',
+    method: req.method,
+    path: req.originalUrl
+  });
 });
 
 // Global error handler (should be after all routes)
