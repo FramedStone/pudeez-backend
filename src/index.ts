@@ -85,12 +85,7 @@ if (STEAM_API_KEY) {
 // -- Middlewares --
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors({
-    origin: [
-        "https://pudeez-backend-neon.vercel.app",
-        "https://pudeez-frontend-jjif.vercel.app"
-    ]
-}));
+app.use(cors());
 
 
 // Persistent session store using SQLite
