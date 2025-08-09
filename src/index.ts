@@ -1794,7 +1794,7 @@ function getGameNameByAppId(appId: string): string {
 }
 
 // 404 handler with debugging
-app.use('*', (req: Request, res: Response) => {
+app.use('/{*splat}', (req: Request, res: Response) => {
   console.log(`404 - Route not found: ${req.method} ${req.originalUrl}`);
   console.log(`Headers:`, req.headers);
   res.status(404).json({ 
