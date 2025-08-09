@@ -88,7 +88,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // CORS middleware - Netlify serverless functions require explicit handling
-import cors from 'cors';
 
 const corsOptions = {
   origin: '*',
