@@ -135,42 +135,15 @@ if (FRONTEND_URL === '*') {
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
-  console.log(`CORS check - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
+  console.log(`Request received - Origin: ${origin}, Method: ${req.method}, Path: ${req.path}`);
   
-  // Always set CORS headers for Vercel serverless functions
-  // This ensures they're set even if Express cors middleware fails
-  
-  // Check if origin is allowed
-  let isAllowed = false;
-  
-  if (!origin) {
-    // Allow requests with no origin (like mobile apps, Postman, etc.)
-    isAllowed = true;
-  } else if (FRONTEND_URL === '*') {
-    isAllowed = true;
-  } else if (allowedOrigins.includes(origin)) {
-    isAllowed = true;
-  } else if (origin.includes('.vercel.app')) {
-    // Allow all Vercel preview deployments
-    isAllowed = true;
-    console.log('Allowing Vercel deployment origin:', origin);
-  }
-  
-  // For Vercel serverless functions, always set the origin to avoid issues
-  res.header('Access-Control-Allow-Origin', origin || '*');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
-  res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
-  
-  // Log for debugging
-  if (!isAllowed && origin) {
-    console.warn(`Origin ${origin} not in allowed origins list but allowing for Vercel compatibility`);
-  }
+  // Vercel handles CORS headers at the routing level via vercel.json
+  // This middleware is mainly for logging and handling OPTIONS requests
   
   // Handle preflight requests immediately
   if (req.method === 'OPTIONS') {
     console.log('Handling OPTIONS preflight request for origin:', origin);
+    // Vercel headers will be applied automatically
     res.status(200).end();
     return;
   }
