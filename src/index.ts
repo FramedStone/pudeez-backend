@@ -14,8 +14,9 @@ declare module 'express-session' {
 import passport from 'passport';
 import SteamStrategy from 'passport-steam';
 
-import { Database, User, AssetRecord, SteamInventoryResponse } from './database_handler';
+import { Database, User, AssetRecord, EscrowRecord, SteamInventoryResponse } from './database_handler';
 import { SteamAsset, storeAssetOnWalrus, retrieveAssetFromWalrus } from './walrus_handler';
+import { escrowEventListener, createSteamInventoryChecker, EscrowStatusUpdate } from './escrow_handler';
 import { randomUUID } from 'crypto';
 
 // Temporary in-memory token store for walletAddress
@@ -45,6 +46,18 @@ if (!STEAM_API_KEY) {
 
 // Initialize database
 const db = new Database(DB_NAME);
+
+// Initialize Steam inventory checker
+const steamInventoryChecker = STEAM_API_KEY ? createSteamInventoryChecker(STEAM_API_KEY) : null;
+
+// Initialize escrow event listener
+escrowEventListener.onEscrowStatusUpdate((update: EscrowStatusUpdate) => {
+  console.log("Escrow status update:", update);
+  // Here you could store escrow updates in database, send notifications, etc.
+});
+
+// Start listening for escrow events
+escrowEventListener.startListening().catch(console.error);
 
 // Configure passport for Steam authentication
 passport.serializeUser((user: unknown, done) => done(null, user));
@@ -86,7 +99,7 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // CORS middleware
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL;
 if (FRONTEND_URL === '*') {
   console.warn('CORS is set to allow all origins. Set FRONTEND_URL in your environment for better security.');
 }
@@ -362,13 +375,21 @@ app.post('/api/user/get_steam_profile', async (req: Request, res: Response) => {
 app.get('/api/steam/inventory/:steamID', async (req: Request, res: Response) => {
     try {
         const { steamID } = req.params;
-        const appid = req.query.appid ? parseInt(req.query.appid as string) : 730;
-        const contextid = req.query.contextid ? parseInt(req.query.contextid as string) : 2;
+        const appid = req.query.appid ? parseInt(req.query.appid as string) : undefined;
+        const contextid = req.query.contextid ? parseInt(req.query.contextid as string) : undefined;
 
         // Validate steamID (should be numeric)
         if (!steamID || !/^\d+$/.test(steamID)) {
             res.status(400).json({
                 error: 'Invalid Steam ID format. Must be numeric.'
+            });
+            return;
+        }
+
+        // Validate required parameters
+        if (!appid || !contextid) {
+            res.status(400).json({
+                error: 'Missing required parameters: appid and contextid are required'
             });
             return;
         }
@@ -766,30 +787,46 @@ app.get('/api/marketplace/assets', async (req: Request, res: Response) => {
             return `${formatted} SUI`;
         };
 
+        // Helper function to get game info by appid
+        const getGameInfo = (appid: number) => {
+            const gameMap: Record<number, { name: string; id: string }> = {
+                730: { name: "Counter-Strike: Global Offensive", id: "csgo" },
+                570: { name: "Dota 2", id: "dota2" },
+                440: { name: "Team Fortress 2", id: "tf2" },
+                252490: { name: "Rust", id: "rust" },
+                304930: { name: "Unturned", id: "unturned" },
+                381210: { name: "Dead by Daylight", id: "deadbydaylight" },
+                // Add more games as needed
+            };
+            return gameMap[appid] || { name: "Unknown Game", id: "unknown" };
+        };
+
         // Transform assets for marketplace display
-        const marketplaceAssets = assets.map((asset: AssetRecord) => ({
-            id: asset.id,
-            assetid: asset.assetid,
-            appid: asset.appid,
-            steamID: asset.steamID,
-            steamName: asset.steamName,
-            steamAvatar: asset.steamAvatar,
-            title: asset.name,
-            game: asset.appid === 730 ? "Counter-Strike: Global Offensive" : 
-                  asset.appid === 570 ? "Dota 2" : 
-                  asset.appid === 440 ? "Team Fortress 2" : "Unknown Game",
-            gameId: asset.appid === 730 ? "csgo" : 
-                   asset.appid === 570 ? "dota2" : 
-                   asset.appid === 440 ? "tf2" : "unknown",
-            price: formatSuiPrice(asset.price), // Price is already stored in SUI format, format intelligently
-            image: asset.icon_url ? `https://steamcommunity-a.akamaihd.net/economy/image/${asset.icon_url}` : "/placeholder.svg",
-            isAuction: false, // All current listings are fixed price
-            timeLeft: null,
-            walletAddress: asset.walletAddress,
-            blobId: asset.blobId,
-            description: asset.description,
-            uploadedAt: asset.uploadedAt
-        }));
+        const marketplaceAssets = assets.map((asset: AssetRecord) => {
+            const gameInfo = getGameInfo(asset.appid);
+            return {
+                id: asset.id,
+                assetid: asset.assetid,
+                appid: asset.appid,
+                contextid: asset.contextid,
+                classid: asset.classid,
+                instanceid: asset.instanceid,
+                steamID: asset.steamID,
+                steamName: asset.steamName,
+                steamAvatar: asset.steamAvatar,
+                title: asset.name,
+                game: gameInfo.name,
+                gameId: gameInfo.id,
+                price: formatSuiPrice(asset.price), // Price is already stored in SUI format, format intelligently
+                image: asset.icon_url ? `https://steamcommunity-a.akamaihd.net/economy/image/${asset.icon_url}` : "/placeholder.svg",
+                isAuction: false, // All current listings are fixed price
+                timeLeft: null,
+                walletAddress: asset.walletAddress,
+                blobId: asset.blobId,
+                description: asset.description,
+                uploadedAt: asset.uploadedAt
+            };
+        });
         
         res.status(200).json({
             success: true,
@@ -869,15 +906,17 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
         });
 
         // Validate required fields
-        if (!walletAddress || !blobId || !signature || !assetid) {
+        if (!walletAddress || !blobId || !signature || !assetid || !appid || isNaN(parseInt(appid))) {
             console.log('[API][Store Asset] Validation failed - Missing required fields:', {
                 walletAddress: !!walletAddress,
                 blobId: !!blobId,
                 signature: !!signature,
-                assetid: !!assetid
+                assetid: !!assetid,
+                appid: appid,
+                appidValid: !isNaN(parseInt(appid))
             });
             return res.status(400).json({ 
-                error: 'Missing required fields: walletAddress, blobId, signature, assetid' 
+                error: 'Missing required fields: walletAddress, blobId, signature, assetid, appid (must be a valid number)' 
             });
         }
 
@@ -885,7 +924,7 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
         const assetRecord: AssetRecord = {
             walletAddress,
             blobId,
-            appid: parseInt(appid) || 0,
+            appid: parseInt(appid), // Remove fallback to 0
             assetid,
             classid: classid || '',
             instanceid: instanceid || '',
@@ -932,6 +971,145 @@ app.post('/api/store-asset', async (req: Request, res: Response) => {
             details: error instanceof Error ? error.message : 'Unknown error' 
         });
     }
+});
+
+// === Escrow API Endpoints ===
+
+// Check Steam inventory for escrow validation
+app.post('/api/escrow/check-inventory', async (req: Request, res: Response) => {
+    try {
+        const { steamId, appId, assetId } = req.body;
+
+        if (!steamInventoryChecker) {
+            return res.status(503).json({
+                error: 'Steam inventory checking is not available (API key not configured)'
+            });
+        }
+
+        if (!steamId || !appId || !assetId) {
+            return res.status(400).json({
+                error: 'steamId, appId, and assetId are required'
+            });
+        }
+
+        const hasAsset = await steamInventoryChecker.checkAssetInInventory(steamId, appId, assetId);
+        
+        res.json({
+            success: true,
+            steamId,
+            appId,
+            assetId,
+            hasAsset,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error checking Steam inventory:', error);
+        res.status(500).json({
+            error: 'Failed to check Steam inventory',
+            details: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// Get item count for escrow validation
+app.post('/api/escrow/get-item-count', async (req: Request, res: Response) => {
+    try {
+        const { steamId, appId, classId, instanceId } = req.body;
+
+        if (!steamInventoryChecker) {
+            return res.status(503).json({
+                error: 'Steam inventory checking is not available (API key not configured)'
+            });
+        }
+
+        if (!steamId || !appId || !classId || !instanceId) {
+            return res.status(400).json({
+                error: 'steamId, appId, classId, and instanceId are required'
+            });
+        }
+
+        const itemCount = await steamInventoryChecker.getItemCount(steamId, appId, classId, instanceId);
+        
+        res.json({
+            success: true,
+            steamId,
+            appId,
+            classId,
+            instanceId,
+            itemCount,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error getting item count:', error);
+        res.status(500).json({
+            error: 'Failed to get item count',
+            details: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// Get escrow status
+app.get('/api/escrow/status/:escrowId', async (req: Request, res: Response) => {
+    try {
+        const { escrowId } = req.params;
+
+        if (!escrowId) {
+            return res.status(400).json({
+                error: 'Escrow ID is required'
+            });
+        }
+
+        // In a real implementation, you'd query the Sui blockchain for escrow state
+        // For now, return placeholder data
+        res.json({
+            success: true,
+            escrowId,
+            status: 'deposited', // initialized, deposited, completed, cancelled
+            message: 'Escrow status tracking not fully implemented yet',
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error getting escrow status:', error);
+        res.status(500).json({
+            error: 'Failed to get escrow status',
+            details: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+// Webhook endpoint for escrow status updates (for frontend real-time updates)
+app.get('/api/escrow/events', (req: Request, res: Response) => {
+    // Set up Server-Sent Events (SSE) for real-time escrow updates
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    const sendEvent = (data: any) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Send initial connection message
+    sendEvent({ type: 'connected', timestamp: new Date().toISOString() });
+
+    // Add listener for escrow updates
+    const updateHandler = (update: EscrowStatusUpdate) => {
+        sendEvent({ type: 'escrow_update', data: update });
+    };
+
+    escrowEventListener.onEscrowStatusUpdate(updateHandler);
+
+    // Clean up on client disconnect
+    req.on('close', () => {
+        // In a real implementation, you'd remove the specific listener
+        console.log('Client disconnected from escrow events');
+    });
 });
 
 // 404 handler

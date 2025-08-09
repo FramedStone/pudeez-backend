@@ -3,6 +3,7 @@ import  sqlite3  from "sqlite3";
 
 const TABLE_NAME = "user";
 const ASSETS_TABLE_NAME = "assets";
+const ESCROW_TABLE_NAME = "escrows";
 
 export interface User {
     address: string,
@@ -27,6 +28,30 @@ export interface AssetRecord {
     steamName?: string;
     steamAvatar?: string;
     uploadedAt: string;
+}
+
+export interface EscrowRecord {
+    id?: number;
+    escrowId: string; // Sui object ID
+    buyerAddress: string;
+    sellerAddress: string;
+    buyerSteamId?: string;
+    sellerSteamId?: string;
+    assetId: string;
+    assetName: string;
+    assetAmount: number;
+    appId: string;
+    classId?: string;
+    instanceId?: string;
+    tradeUrl: string;
+    priceInSui: string;
+    initialSellerItemCount: number;
+    initialBuyerItemCount: number;
+    status: 'in-progress' | 'cancelled' | 'completed';
+    transactionDigest?: string;
+    blobId?: string; // For Walrus storage
+    createdAt: string;
+    updatedAt: string;
 }
 
 export interface SteamAssetResponse {
@@ -75,6 +100,7 @@ export class Database {
         this.rawDb = new sqlite3.Database(filename);
         this.initializeUserTable();
         this.initializeAssetsTable();
+        this.initializeEscrowTable();
     }
 
     /**
@@ -129,6 +155,44 @@ export class Database {
                 console.log('Assets table initialized successfully');
                 // Run migrations after table creation
                 this.runMigrations();
+            }
+        });
+    }
+
+    /**
+     * Initialize the escrow table if it doesn't exist
+     */
+    private initializeEscrowTable(): void {
+        const createEscrowTable = `
+            CREATE TABLE IF NOT EXISTS ${ESCROW_TABLE_NAME} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                escrowId TEXT NOT NULL UNIQUE,
+                buyerAddress TEXT NOT NULL,
+                sellerAddress TEXT NOT NULL,
+                buyerSteamId TEXT,
+                sellerSteamId TEXT,
+                assetId TEXT NOT NULL,
+                assetName TEXT NOT NULL,
+                assetAmount INTEGER NOT NULL,
+                appId TEXT NOT NULL,
+                classId TEXT,
+                instanceId TEXT,
+                tradeUrl TEXT NOT NULL,
+                priceInSui TEXT NOT NULL,
+                initialSellerItemCount INTEGER NOT NULL,
+                initialBuyerItemCount INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'in-progress' CHECK(status IN ('in-progress', 'cancelled', 'completed')),
+                transactionDigest TEXT,
+                blobId TEXT,
+                createdAt TEXT NOT NULL,
+                updatedAt TEXT NOT NULL
+            )
+        `;
+        this.rawDb.exec(createEscrowTable, (err: Error | null) => {
+            if (err) {
+                console.error('Error creating escrow table:', err);
+            } else {
+                console.log('Escrow table initialized successfully');
             }
         });
     }
@@ -375,6 +439,168 @@ export class Database {
             this.rawDb.all(query, [], (err: Error | null, rows: User[]) => {
                 if (err) {
                     console.error('Error fetching all users:', err);
+                    reject(err);
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    // === Escrow Methods ===
+
+    /**
+     * Add a new escrow record
+     */
+    addEscrow(escrowRecord: EscrowRecord): Promise<number> {
+        return new Promise((resolve, reject) => {
+            const query = `
+                INSERT INTO ${ESCROW_TABLE_NAME} (
+                    escrowId, buyerAddress, sellerAddress, buyerSteamId, sellerSteamId,
+                    assetId, assetName, assetAmount, appId, classId, instanceId,
+                    tradeUrl, priceInSui, initialSellerItemCount, initialBuyerItemCount,
+                    status, transactionDigest, blobId, createdAt, updatedAt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+            
+            const params = [
+                escrowRecord.escrowId,
+                escrowRecord.buyerAddress,
+                escrowRecord.sellerAddress,
+                escrowRecord.buyerSteamId,
+                escrowRecord.sellerSteamId,
+                escrowRecord.assetId,
+                escrowRecord.assetName,
+                escrowRecord.assetAmount,
+                escrowRecord.appId,
+                escrowRecord.classId,
+                escrowRecord.instanceId,
+                escrowRecord.tradeUrl,
+                escrowRecord.priceInSui,
+                escrowRecord.initialSellerItemCount,
+                escrowRecord.initialBuyerItemCount,
+                escrowRecord.status,
+                escrowRecord.transactionDigest,
+                escrowRecord.blobId,
+                escrowRecord.createdAt,
+                escrowRecord.updatedAt
+            ];
+            
+            this.rawDb.run(query, params, function(err: Error | null) {
+                if (err) {
+                    console.error('Error adding escrow:', err);
+                    reject(err);
+                } else {
+                    resolve(this.lastID);
+                }
+            });
+        });
+    }
+
+    /**
+     * Update escrow status
+     */
+    updateEscrowStatus(escrowId: string, status: 'in-progress' | 'cancelled' | 'completed', transactionDigest?: string): Promise<boolean> {
+        return new Promise((resolve, reject) => {
+            const query = `
+                UPDATE ${ESCROW_TABLE_NAME} 
+                SET status = ?, updatedAt = ?, transactionDigest = COALESCE(?, transactionDigest)
+                WHERE escrowId = ?
+            `;
+            
+            const updatedAt = new Date().toISOString();
+            
+            this.rawDb.run(query, [status, updatedAt, transactionDigest, escrowId], function(err: Error | null) {
+                if (err) {
+                    console.error('Error updating escrow status:', err);
+                    reject(err);
+                } else {
+                    resolve(this.changes > 0);
+                }
+            });
+        });
+    }
+
+    /**
+     * Get escrow by ID
+     */
+    getEscrowById(escrowId: string): Promise<EscrowRecord | null> {
+        return new Promise((resolve, reject) => {
+            const query = `SELECT * FROM ${ESCROW_TABLE_NAME} WHERE escrowId = ?`;
+            
+            this.rawDb.get(query, [escrowId], (err: Error | null, row: EscrowRecord) => {
+                if (err) {
+                    console.error('Error fetching escrow by ID:', err);
+                    reject(err);
+                } else {
+                    resolve(row || null);
+                }
+            });
+        });
+    }
+
+    /**
+     * Get escrows by buyer address
+     */
+    getEscrowsByBuyer(buyerAddress: string): Promise<EscrowRecord[]> {
+        return new Promise((resolve, reject) => {
+            const query = `
+                SELECT * FROM ${ESCROW_TABLE_NAME} 
+                WHERE buyerAddress = ? 
+                ORDER BY createdAt DESC
+            `;
+            
+            this.rawDb.all(query, [buyerAddress], (err: Error | null, rows: EscrowRecord[]) => {
+                if (err) {
+                    console.error('Error fetching escrows by buyer:', err);
+                    reject(err);
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    /**
+     * Get escrows by seller address
+     */
+    getEscrowsBySeller(sellerAddress: string): Promise<EscrowRecord[]> {
+        return new Promise((resolve, reject) => {
+            const query = `
+                SELECT * FROM ${ESCROW_TABLE_NAME} 
+                WHERE sellerAddress = ? 
+                ORDER BY createdAt DESC
+            `;
+            
+            this.rawDb.all(query, [sellerAddress], (err: Error | null, rows: EscrowRecord[]) => {
+                if (err) {
+                    console.error('Error fetching escrows by seller:', err);
+                    reject(err);
+                } else {
+                    resolve(rows || []);
+                }
+            });
+        });
+    }
+
+    /**
+     * Get all escrows with optional status filter
+     */
+    getAllEscrows(status?: 'in-progress' | 'cancelled' | 'completed'): Promise<EscrowRecord[]> {
+        return new Promise((resolve, reject) => {
+            let query = `SELECT * FROM ${ESCROW_TABLE_NAME}`;
+            const params: any[] = [];
+            
+            if (status) {
+                query += ' WHERE status = ?';
+                params.push(status);
+            }
+            
+            query += ' ORDER BY createdAt DESC';
+            
+            this.rawDb.all(query, params, (err: Error | null, rows: EscrowRecord[]) => {
+                if (err) {
+                    console.error('Error fetching all escrows:', err);
                     reject(err);
                 } else {
                     resolve(rows || []);
