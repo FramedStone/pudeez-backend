@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import cors from 'cors';
 import session from 'express-session';
 import SQLiteStoreFactory from 'connect-sqlite3';
 
@@ -84,6 +85,13 @@ if (STEAM_API_KEY) {
 // -- Middlewares --
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cors({
+    origin: [
+        "https://pudeez-backend-neon.vercel.app",
+        "https://pudeez-frontend-jjif.vercel.app"
+    ]
+}));
+
 
 // Persistent session store using SQLite
 const SQLiteStore = SQLiteStoreFactory(session);
@@ -104,40 +112,6 @@ app.use(passport.session());
 
 // CORS middleware
 const FRONTEND_URL = process.env.FRONTEND_URL;
-const PRODUCTION_FRONTEND_URL = process.env.PRODUCTION_FRONTEND_URL || 'https://pudeez-frontend-jjif.vercel.app';
-
-// Allow multiple origins for CORS
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  FRONTEND_URL,
-  PRODUCTION_FRONTEND_URL
-].filter(Boolean); // Remove any undefined values
-
-if (FRONTEND_URL === '*') {
-  console.warn('CORS is set to allow all origins. Set FRONTEND_URL in your environment for better security.');
-}
-
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const origin = req.headers.origin;
-  
-  // Allow requests with no origin (like mobile apps or curl requests)
-  if (!origin) {
-    res.header('Access-Control-Allow-Origin', '*');
-  } else if (FRONTEND_URL === '*' || allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
-});
 
 // Error handling middleware
 app.use(
